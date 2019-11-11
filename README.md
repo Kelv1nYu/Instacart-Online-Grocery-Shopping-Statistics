@@ -13,3 +13,7 @@ The Second project of Introduction to Data Science of GWU
 ## Nov. 07, 2019 Update
 
 * Create the project
+
+## Nov. 09, 2019 Update
+
+* Upload the file of feature selection
