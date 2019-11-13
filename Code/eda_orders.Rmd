@@ -1,0 +1,145 @@
+---
+title: "eda_project"
+author: "Qing Ruan"
+date: "11/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# some of common options (and the defaults) are: 
+# include=T, eval=T, echo=T, results='hide'/'asis',..., collapse=F, warning=T, message=T, error=T, cache=T, fig.width=6, fig.height=4, fig.dim=c(6,4) #inches, fig.align='left'/'center','right', 
+knitr::opts_chunk$set(include = F)
+# knitr::opts_chunk$set(echo = TRUE)
+options(scientific=T, digits = 3) 
+# options(scipen=9, digits = 3) 
+# ‘scipen’: integer. A penalty to be applied when deciding to print numeric values in fixed or exponential notation.  Positive values bias towards fixed and negative towards scientific notation: fixed notation will be preferred unless it is more than ‘scipen’ digits wider.
+# use scipen=999 to prevent scientific notation at all times
+```
+
+```{r basicfcn, include=F}
+# can add quietly=T option to the require() function
+loadPkg = function(x) { if (!require(x,character.only=T, quietly =T)) { install.packages(x,dep=T,repos="http://cran.us.r-project.org"); if(!require(x,character.only=T)) stop("Package not found") } }
+```
+
+```{r load_dataset}
+orders<-read.csv("orders.csv")
+```
+## Part1 orders.csv
+### 1.1 basic analysis
+```{r basic_info_orders,include=T}
+# basic infomation
+summary(orders)
+str(orders)
+head(orders)
+```
+As we could see, orders.csv has columns about order_id, user_id, eval_set,order_number order_dow order_hour_of_day days_since_prior_order
+```{r missing_value_preprocessing,include=T}
+# check missing value
+apply(orders , 2, function(x) any(is.na(x)))
+```
+We found that there exists missing vaules in days_since_prior_order column, which means they are the first order for each user. Here we replace these missing values with zero instead.
+```{r}
+orders$days_since_prior_order[is.na(orders$days_since_prior_order)]<-0
+any(is.na(orders$days_since_prior_order))
+```
+### 1.2 three sets
+```{r three_sets_1,include=T}
+# how many orders in each eval_set?
+library(ggplot2)
+ggplot()+
+  geom_bar(aes(x = orders$eval_set, fill = orders$eval_set)) + 
+  scale_x_discrete(labels = c("prior", "train", "test")) +
+  xlab("eval set") +
+  ylab("orders") +
+  ggtitle("Types of set") +
+  scale_fill_discrete(name = "eval_set") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+There are 3214,784 orders for the prior set, and the dataset extract the last order of each custormer as train and test dataset, respectively.
+The train set has 131,209 observations and the test dataset has 75,000 observations.
+```{r three_sets_2,include=T}
+# how many users in each eval_set?
+library(dplyr)
+orders %>%
+  group_by(eval_set) %>%
+  distinct(user_id) %>%
+  ggplot(aes(x = eval_set,fill = eval_set)) +
+  geom_bar() + 
+  scale_x_discrete(labels = c("prior", "train", "test")) +
+  xlab("eval set") +
+  ylab("users") +
+  ggtitle("users of different eval set") +
+  theme(plot.title = element_text(hjust = 0.5))
+  
+```
+There are 206,209 customers in total. Out of which, the last purchase of 131,209 customers are given as train set and we need to predict for the rest 75,000 customers.
+### 1.3 Order information
+#### 1.3.1 Frequency of orders
+```{r,include=T}
+library(data.table)
+orders %>%
+  group_by(user_id) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = count, fill = factor(count))) +
+  geom_bar() +
+  xlab("orders") +
+  ylab("number of users") +
+  ggtitle("frequency of orders") +
+  guides(fill = FALSE)+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+So there are no orders less than 4 and is max capped at 100 as given in the data page.
+
+```{r}
+# 感觉这个箱线图不用画
+# orders %>%
+#   group_by(user_id) %>%
+#   summarise(count = n()) %>%
+#   ggplot(aes(y=count),fill=count) +
+#   geom_boxplot(outlier.color = "red") +
+#   ylab("number of orders") +
+#   ggtitle("frequency of orders") +
+#   guides(fill = FALSE)
+```
+From the boxplot above, we can find that most orders are around 12.
+#### 1.3.2 Times of orders
+when do people order?
+Let’s have a look when people buy groceries online.
+
+```{r,include=T }
+# Hour of Day
+ggplot() +
+  geom_bar(aes(x = orders$order_hour_of_day,fill = factor(orders$order_hour_of_day))) + 
+  xlab("hour of day") +
+  ylab("orders") +
+  ggtitle("Orders by hour of day") +
+  scale_fill_discrete(name = "order_hour_of_day") +
+  labs(color = "order_hour_of_day")+
+  guides(fill = FALSE)+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+So majority of the orders are made during day time. The 10am hour is the most popular time to make orders, followed by a dip around lunch time and a pickup in the afternoon.Now let us combine the day of week and hour of day to see the distribution.
+```{r,include=T}
+ # Day of week
+ggplot() +
+  geom_bar(aes(x = orders$order_dow,fill = factor(orders$order_dow))) + 
+  xlab("day of week") +
+  ylab("orders") +
+  ggtitle("orders by day of week") +
+  scale_fill_discrete(name = "order_dow") +
+  theme(plot.title = element_text(hjust = 0.5))+ 
+  guides(fill = FALSE) 
+```
+It looks as though 0 represents Saturday and 1 represents Sunday. Wednesday is then the least popular day to make orders.
+### 1.4 Time interval
+```{r,include=T }
+ggplot()+
+  geom_bar(aes(x = orders$days_since_prior_order, fill = factor(orders$days_since_prior_order))) + 
+  xlab("days of prior order") +
+  ylab("count") +
+  ggtitle("Time interval between orders") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  guides(fill = FALSE)
+```
+While the most popular relative time between orders is monthly (30 days), there are "local maxima" at weekly (7 days), biweekly (14 days), triweekly (21 days), and quadriweekly (28 days). Looks like customers order once in every week (check the peak at 7 days) or once in a month (peak at 30 days). We could also see smaller peaks at 14, 21 and 28 days (weekly intervals).
