@@ -149,14 +149,14 @@ t2 <- merge1 %>%
   group_by(user_id, product_id) %>%
   summarise(f.o.n = min(order_number))
 feature13 <- merge(t1, t2, by = 'user_id') %>%
-  mutate(ror.pu = feature12$t.b / (o.m - f.o.n))
+  mutate(ror.pu = feature12$t.b / (o.m - f.o.n + 1))
 ```
 
 ```{r f14}
 # last 4 order
 feature14 <- merge1 %>%
   group_by(user_id)%>%
-  mutate(differ = max(order_number) - order_number) %>%
+  mutate(differ = max(order_number) - order_number + 1) %>%
   filter(differ <= 4) %>%
   group_by(user_id, product_id) %>%
   summarise(l4o = n() / 4)
@@ -170,6 +170,4 @@ upFeature <- merge(upFeature, feature14, by = c('user_id', 'product_id'))
 ```{r allFeature}
 allFeature <- merge(upFeature, productFeature, by = 'product_id')
 allFeature <- merge(allFeature,userFeature, by = 'user_id')
-allFeature[ror.pu == Inf] <- 0
-
 ```
