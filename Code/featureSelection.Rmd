@@ -18,15 +18,15 @@ library("dplyr")
 ```{r prepare}
 aisles <- read.csv("../DataSet/aisles.csv")
 departments <- read.csv("../DataSet/departments.csv")
-o.p.p <- read.csv("../DataSet/order_products__prior.csv")
-o.p.t <- read.csv("../DataSet/order_products__train.csv")
+prior <- read.csv("../DataSet/order_products__prior.csv")
+train <- read.csv("../DataSet/order_products__train.csv")
 orders <- read.csv("../DataSet/orders.csv")
 products <- read.csv("../DataSet/products.csv")
 ```
 
 ```{r preprocess}
 orders[is.na(orders)] <- 0
-merge1 <- merge(o.p.p, orders, by = 'order_id')
+merge1 <- merge(prior, orders, by = 'order_id')
 orders_prior <- subset(orders, eval_set == 'prior')
 ```
 
@@ -98,14 +98,14 @@ userFeature <- merge(userFeature, feature7, by = 'user_id')
 
 ```{r f8}
 # num of orders of products
-feature8 <- o.p.p %>%
+feature8 <- prior %>%
   group_by(product_id) %>%
   summarise(n.o.p = n())
 ```
 
 ```{r f9}
 # repeat order rate of product
-feature9 <- o.p.p %>%
+feature9 <- prior %>%
   group_by(product_id) %>%
   summarise(ror.p = mean(reordered))
 ```
@@ -122,7 +122,7 @@ feature10 <- subset(feature10, select = c(product_id, department_id, ror.pd))
 
 ```{r f11}
 # avg position
-feature11 <- o.p.p %>%
+feature11 <- prior %>%
   group_by(product_id) %>%
   summarise(avg.p = mean(add_to_cart_order))
 ```
