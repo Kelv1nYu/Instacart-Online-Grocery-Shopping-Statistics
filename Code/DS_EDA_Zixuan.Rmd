@@ -1,0 +1,158 @@
+---
+title: "DS_EDA_Zixuan"
+author: "Cherry"
+date: "11/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(readr) 
+library(data.table)
+library(dplyr)
+library(ggplot2)
+```
+```{r}
+products <- read.csv("products.csv")
+aisles <- read.csv("aisles.csv")
+departments <- read.csv("departments.csv")
+orders <- read.csv("orders.csv")
+train <- read.csv("order_products__train.csv")
+prior <- read.csv("order_products__prior.csv")
+```
+
+```{r}
+orders <- orders %>% mutate(order_hour_of_day = as.numeric(order_hour_of_day), eval_set = as.factor(eval_set))
+products <- products %>% mutate(product_name = as.factor(product_name))
+aisles <- aisles %>% mutate(aisle = as.factor(aisle))
+departments <- departments %>% mutate(department = as.factor(department))
+```
+
+```{r}
+product1 <- full_join(products,aisles,by="aisle_id")
+product <- full_join(product1,departments,by="department_id")
+
+all_order <- rbind(train,prior)
+```
+
+```{r}
+orders_new <- subset(orders, select=c(order_id,user_id))
+all_order_new <- subset(all_order,select = c(order_id,product_id))
+m1 <- full_join(orders_new,all_order_new,by="order_id")
+product_order <- full_join(product,m1,by="product_id")
+# may not correct
+```
+
+#  Sales in each department(find best selling apartment)
+```{r}
+library(tidyr)
+product_order %>%
+  drop_na(department) %>%
+  group_by(department) %>%
+  distinct(order_id, .keep_all = T) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x=department,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="The number of orders in each department", x="deparmtment", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))
+  theme(plot.title = element_text(hjust = 0.5))
+```
+The most three popular departments are produce, dairy eggs and snacks.
+
+# Sales in each aisle(best selling aisle)
+```{r}
+res <- product_order %>%
+  drop_na(aisle) %>%
+  group_by(aisle) %>%
+  distinct(order_id, .keep_all = T) %>%
+  summarise(count = n())
+
+res <- res[c(1:15),]
+
+res %>%
+  ggplot(aes(x=aisle,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="The number of products in top 15 aisles ", x="deparmtment", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+The top three best selling aisles are fresh fruits, fresh vegetables and packaged vegetables fruits.
+
+# the number of reordered products
+```{r,warning=FALSE}
+tmp <- all_order %>% 
+  group_by(reordered) %>% 
+  summarize(count = n()) %>% 
+  mutate(reordered = as.factor(reordered)) %>%
+  mutate(proportion = count/sum(count))
+kable(tmp)
+
+tmp %>% 
+  ggplot(aes(x=reordered,y=count,fill=reordered))+
+  geom_bar(stat="identity")+
+  labs(title="Not reorder vs Reorder", x="not reordered=0; reordered=1", y="count")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+# most reordered product
+```{r}
+tmp2 <- all_order %>% 
+  group_by(product_id) %>% 
+  summarize(proportion_reordered = mean(reordered), n=n()) %>% 
+  top_n(10,wt=proportion_reordered) %>% 
+  arrange(desc(proportion_reordered)) %>% 
+  left_join(product,by="product_id")
+kable(tmp)
+
+tmp2 %>%
+  ggplot(aes(x=reorder(product_name,-proportion_reordered), y=proportion_reordered))+
+  geom_bar(stat="identity",fill="red")+
+  theme(axis.text.x=element_text(angle=90, hjust=1),axis.title.x = element_blank())+coord_cartesian(ylim=c(0.85,0.95))+
+  labs(title="TOP 10 reordered rate", x="products", y="reordered rate")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+The three products with the highest reordered rate are Raw Veggie Wrappers, Serenity Ultimate Extrema Overnight Pads and Orange Energy Shots.
+
+# department with highest reorder ratio 
+```{r}
+tmp <- all_order %>%
+  group_by(product_id)%>%
+  summarize(proportion_reordered = mean(reordered)) %>% 
+  left_join(product,by="product_id")
+
+tmp %>%
+  group_by(department) %>%
+  summarize(depart_reordered = mean(proportion_reordered)) %>%
+  ggplot(aes(x=department,y=depart_reordered))+
+  geom_point(color="red", size=2)+
+  labs(title="Reordered rate in each department", x="departments", y="reordered rate")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+Personal care has lowest reorder ratio and dairy eggs have highest reorder ratio.
+
+# Relationship between add_to_cart and reordered？
+```{r,warning=FALSE}
+tmp3 <- all_order %>%
+  group_by(add_to_cart_order)%>%
+  summarize(proportion_reordered = mean(reordered))
+
+tmp3 %>%
+  ggplot(aes(x=add_to_cart_order,y=proportion_reordered))+
+  geom_point()+
+  xlim(c(0,70))+
+  ylim(c(0.3,0.7))+
+  labs(title="Add to cart order - Reorder ratio", x="add to cart order", y="reordered rate")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r,t-test}
+t.test(add_to_cart_order~reordered,data=prior)
+```
+1.Orders placed initially in the cart are more likely to be reorderd than one placed later in the cart.
+2.We did t-test to verify whether the sequence of adding to cart are siginificantly different between reordered products and not reordered products. We can conclude from the results showing the p-value is smaller than 0.05 that the sequence of adding to cart significantly influence whether the products being reordered.
