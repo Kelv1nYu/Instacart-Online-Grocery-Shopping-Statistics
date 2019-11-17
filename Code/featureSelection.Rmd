@@ -1,0 +1,175 @@
+---
+title: "Feature Selection"
+author: "cherry"
+date: "Nov 11, 2019"
+output: html_document
+---
+
+```{r basicfcn, include=F}
+# can add quietly=T option to the require() function
+loadPkg = function(x) { if (!require(x,character.only=T, quietly =T)) { install.packages(x,dep=T,repos="http://cran.us.r-project.org"); if(!require(x,character.only=T)) stop("Package not found") } }
+```
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library("dplyr")
+```
+
+```{r prepare}
+aisles <- read.csv("../DataSet/aisles.csv")
+departments <- read.csv("../DataSet/departments.csv")
+o.p.p <- read.csv("../DataSet/order_products__prior.csv")
+o.p.t <- read.csv("../DataSet/order_products__train.csv")
+orders <- read.csv("../DataSet/orders.csv")
+products <- read.csv("../DataSet/products.csv")
+```
+
+```{r preprocess}
+orders[is.na(orders)] <- 0
+merge1 <- merge(o.p.p, orders, by = 'order_id')
+orders_prior <- subset(orders, eval_set == 'prior')
+```
+
+```{r f1}
+# num of orders of users
+feature1 <- merge1 %>%
+  group_by(user_id) %>%
+  summarise(n.o.u = max(order_number))
+```
+
+```{r f2}
+# num of products of users
+feature2 <- merge1 %>%
+  group_by(user_id) %>%
+  #distinct(product_id, .keep_all = TRUE) %>%
+  summarise(n.p.u = n())
+```
+
+```{r f3}
+# avg products of orders of users
+f1_f2 <- merge(feature1, feature2, by = 'user_id') %>%
+  mutate(avg.pou = n.p.u / n.o.u)
+```
+
+```{r f4}
+# day of max order
+feature4 <- merge1 %>%
+  group_by(user_id,order_dow) %>%
+  summarise(count = n()) %>% 
+  group_by(user_id) %>%
+  filter(count == max(count))
+feature4 <- feature4[,-3]
+
+colnames(feature4)[2] <- "d.m.o"
+```
+
+```{r f5}
+# time of day of max order
+feature5 <- merge1 %>%
+  group_by(user_id, order_hour_of_day) %>%
+  summarise(count = n()) %>%
+  group_by(user_id) %>%
+  filter(count == max(count))
+feature5 <- feature5[,-3]
+
+colnames(feature5)[2] <- "t.m.o"
+```
+
+```{r f6}
+# repeat order rate of user
+feature6 <- merge1 %>%
+  group_by(user_id) %>%
+  summarise(ror.u = mean(reordered))
+```
+
+```{r f7}
+# oreder frequency
+feature7 <- orders_prior %>%
+  group_by(user_id) %>%
+  summarise(o.f = sum(days_since_prior_order) / n())
+```
+
+```{r userFeature}
+userFeature <- merge(f1_f2, feature4, by = 'user_id')
+userFeature <- merge(userFeature, feature5, by = 'user_id')
+userFeature <- merge(userFeature, feature6, by = 'user_id')
+userFeature <- merge(userFeature, feature7, by = 'user_id')
+```
+
+```{r f8}
+# num of orders of products
+feature8 <- o.p.p %>%
+  group_by(product_id) %>%
+  summarise(n.o.p = n())
+```
+
+```{r f9}
+# repeat order rate of product
+feature9 <- o.p.p %>%
+  group_by(product_id) %>%
+  summarise(ror.p = mean(reordered))
+```
+
+```{r f10}
+# repeat order rate of product department
+d_p = merge(departments, products, by = 'department_id')
+d_p_1 = merge(d_p, feature9, by = 'product_id')
+feature10 <- d_p_1 %>%
+  group_by(department_id) %>%
+  mutate(ror.pd = mean(ror.p))
+feature10 <- subset(feature10, select = c(product_id, department_id, ror.pd))
+```
+
+```{r f11}
+# avg position
+feature11 <- o.p.p %>%
+  group_by(product_id) %>%
+  summarise(avg.p = mean(add_to_cart_order))
+```
+
+```{r productFeature}
+productFeature <- merge(feature8, feature9, by = 'product_id')
+productFeature <- merge(productFeature, feature10, by = 'product_id')
+productFeature <- merge(productFeature, feature11, by = 'product_id')
+```
+
+```{r f12}
+# time of bought
+feature12 <- merge1 %>%
+  group_by(user_id, product_id) %>%
+  summarise(t.b = n())
+```
+
+```{r f13}
+# repeat order rate of product of user
+t1 <- merge1 %>%
+  group_by(user_id) %>%
+  summarise(o.m = max(order_number))
+t2 <- merge1 %>%
+  group_by(user_id, product_id) %>%
+  summarise(f.o.n = min(order_number))
+feature13 <- merge(t1, t2, by = 'user_id') %>%
+  mutate(ror.pu = feature12$t.b / (o.m - f.o.n))
+```
+
+```{r f14}
+# last 4 order
+feature14 <- merge1 %>%
+  group_by(user_id)%>%
+  mutate(differ = max(order_number) - order_number) %>%
+  filter(differ <= 4) %>%
+  group_by(user_id, product_id) %>%
+  summarise(l4o = n() / 4)
+```
+
+```{r upFeature}
+upFeature <- merge(feature12, feature13, by = c('user_id', 'product_id'))
+upFeature <- merge(upFeature, feature14, by = c('user_id', 'product_id'))
+```
+
+```{r allFeature}
+allFeature <- merge(upFeature, productFeature, by = 'product_id')
+allFeature <- merge(allFeature,userFeature, by = 'user_id')
+allFeature[ror.pu == Inf] <- 0
+
+```
