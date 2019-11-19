@@ -18,3 +18,127 @@ loadPkg = function(x) { if (!require(x,character.only=T, quietly =T)) { install.
 knitr::opts_chunk$set(echo = TRUE)
 library("dplyr")
 ```
+
+
+```{r}
+features <- read.csv("../DataSet/features.csv")
+features <- subset(features,user_id<=10000)
+```
+
+1.try PCA and PCA regression
+```{r}
+dfpca <- features[c(4:10,12:21)]
+pca <- prcomp(dfpca,scale=TRUE)
+summary(pca)
+```
+
+```{r}
+pr.var <- (pca$sdev^2)
+pve <- pr.var/sum(pr.var)
+cumsum(pve)
+plot(cumsum(pve), xlab="Principal Component (non-standardized)", ylab ="Cumulative Proportion of Variance Explained",ylim=c(0,1),type="b")
+```
+
+13 components:0.994
+14 components:1.000
+
+PCA regression:
+```{r}
+loadPkg("pls")
+pcr.fit1=pcr(ytrain~.,data=dfpca,scale=TRUE,validation ="CV")
+summary(pcr.fit1)
+```
+
+```{r}
+validationplot(pcr.fit1,val.type="R2")
+```
+
+
+2.logistic regression
+#find that o.m and n.o.u are actually a same variable. Exclude o.m from the variables.
+```{r}
+shoplogit <- glm(ytrain ~ t.b + f.o.n + ror.pu + l4o + n.o.p + ror.p  + ror.pd + avg.p + n.o.u + n.p.u + avg.pou + d.m.o + t.m.o + ror.u + o.f, data=features,family="binomial")
+summary(shoplogit)
+```
+n.o.p and d.m.o are not significant among all these variables
+
+
+model evaluation:
+```{r}
+loadPkg("pROC")
+features$predict1<- predict(shoplogit,type=c("response"))
+h1 <- roc(ytrain ~ predict1, data=features)
+auc(h1)
+plot(h1)
+```
+
+AUC=0.74<0.8
+
+3.KNN
+#split the whole data set to train set and test set
+```{r}
+set.seed(1)
+shop_train_rows = sample(1:nrow(features),
+                              round(0.8 * nrow(features), 0),  
+                              replace = FALSE)
+
+
+length(shop_train_rows) / nrow(features)
+
+shop_train = features[shop_train_rows,c(4,6:10,12:20)] 
+shop_train_label = features[shop_train_rows,"ytrain"]
+shop_test = features[-shop_train_rows,c(4,6:10,12:20)] 
+shop_test_label = features[-shop_train_rows,"ytrain"]
+
+# Check the number of rows in each set.
+nrow(shop_train)
+nrow(shop_test)
+
+```
+
+#function of choosing k
+```{r}
+loadPkg("class")
+chooseK = function(k, train_set, val_set, train_class, val_class){
+  
+  # Build knn with k neighbors considered.
+  set.seed(1)
+  class_knn = knn(train = train_set,    #<- training set cases
+                  test = val_set,       #<- test set cases
+                  cl = train_class,     #<- category for classification
+                  k = k,                #<- number of neighbors considered
+                  use.all = TRUE)       #<- control ties between class assignments
+                                        #   If true, all distances equal to the kth 
+                                        #   largest are included
+  
+  tab = table(class_knn, val_class)
+  
+  # Calculate the accuracy.
+  accu = sum(tab[row(tab) == col(tab)]) / sum(tab) 
+  print(accu)
+  cbind(k = k, accuracy = accu)
+}
+```
+
+```{r}
+#1nn
+shop_1nn <- knn(train=shop_train,test=shop_test,cl=shop_train_label,k=1,use.all=TRUE)
+
+```
+
+```{r}
+knn_different_k = sapply(seq(1, 5, by = 2),  #<- set k to be odd number from 1 to 21
+                         function(x) chooseK(x, 
+                                             train_set = shop_train,
+                                             val_set = shop_test,
+                                             train_class = shop_train_label,
+                                             val_class = shop_test_label))
+
+```
+
+4.decision tree
+```{r}
+library("rpart")
+shoptree <- rpart(ytrain ~ t.b + f.o.n + ror.pu + l4o + n.o.p + ror.p  + ror.pd + avg.p + n.o.u + n.p.u + avg.pou + d.m.o + t.m.o + ror.u + o.f, data=shop_train, method="class",control =rpart.control(minsplit =1,minbucket=1, cp=0))
+```
+
