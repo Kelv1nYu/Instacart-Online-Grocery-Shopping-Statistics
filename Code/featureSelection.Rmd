@@ -23,6 +23,10 @@ train <- read.csv("../DataSet/order_products__train.csv")
 orders <- read.csv("../DataSet/orders.csv")
 products <- read.csv("../DataSet/products.csv")
 
+# change the data set num or rows, origin has over 6.42 million rows, almost 1GB. Now just keep user_id <= 10000 data
+
+orders <- subset(orders, user_id <= 10000)
+
 orders_prior <- subset(orders, eval_set == 'prior')
 orders_train <- subset(orders, eval_set == 'train')
 train2 <- subset(train, select = c(order_id, product_id, reordered))
@@ -30,6 +34,8 @@ colnames(train2)[3] <- "ytrain"
 orders_train <- subset(orders_train, select = c(order_id, user_id))
 mergeTmp <- merge(orders_train, train2, by = 'order_id')
 mergeTmp <- mergeTmp[,-1]
+
+
 ```
 
 ```{r preprocess}
