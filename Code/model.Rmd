@@ -127,13 +127,35 @@ shop_1nn <- knn(train=shop_train,test=shop_test,cl=shop_train_label,k=1,use.all=
 ```
 
 ```{r}
-knn_different_k = sapply(seq(1, 5, by = 2),  #<- set k to be odd number from 1 to 21
+#k=1,3,5
+knn_different_k = sapply(seq(1, 5, by = 2),  
                          function(x) chooseK(x, 
                                              train_set = shop_train,
                                              val_set = shop_test,
                                              train_class = shop_train_label,
                                              val_class = shop_test_label))
 
+```
+
+```{r}
+#k=7,9,11
+knn_different_k2 = sapply(seq(7, 11, by = 2),  
+                         function(x) chooseK(x, 
+                                             train_set = shop_train,
+                                             val_set = shop_test,
+                                             train_class = shop_train_label,
+                                             val_class = shop_test_label))
+
+```
+
+```{r}
+#k=13,15,17
+knn_different_k3 = sapply(seq(13, 17, by = 2),  
+                         function(x) chooseK(x, 
+                                             train_set = shop_train,
+                                             val_set = shop_test,
+                                             train_class = shop_train_label,
+                                             val_class = shop_test_label))
 ```
 
 4.decision tree
