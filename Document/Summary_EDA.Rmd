@@ -1,0 +1,372 @@
+---
+title: "Summary_V1"
+author: "Cherry"
+date: "11/17/2019"
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+  word_document: default
+---
+
+```{r basicfcn, include=F}
+# can add quietly=T option to the require() function
+loadPkg = function(x) { if (!require(x,character.only=T, quietly =T)) { install.packages(x,dep=T,repos="http://cran.us.r-project.org"); if(!require(x,character.only=T)) stop("Package not found") } }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# Load the library
+library(readr) 
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(corrplot)
+library(knitr)
+
+# Load the dataset
+products <- read.csv("products.csv")
+aisles <- read.csv("aisles.csv")
+departments <- read.csv("departments.csv")
+orders <- read.csv("orders.csv")
+train <- read.csv("order_products__train.csv")
+prior <- read.csv("order_products__prior.csv")
+```
+
+
+## Chapter 1 - Introduction
+Every time when you shop from meticulously planned grocery lists you will leave the marks of browsing or ordering. Instacart's grocery ordering and delivery app aims to make it easy to fill your refrigerator and pantry with your personal favorites and staples when you need them. But how they can know what kinds of food are exactly what you need? 
+
+Instacart released a dataset, “The Instacart Online Grocery Shopping Dataset 2017”, which contains a sample of over 3 million grocery orders from more than 200,000 Instacart users. For each user, they provided their orders and the sequence of products in each orders. They also provided the time including the week and the hour of day the order was placed, and the relative time between orders. Using this data to test models, Instacart are enable to predict products that a user will buy again, try for the first time or add to cart next time. 
+
+Our project using this datasets which are sourced from Kaggle aims to predict which previously purchased products would be in a consumer’s next order. This report focuses on exploratory data analysis and model prediction of orders and products according to Instacart online transaction, the rest of this report contains five chapters. 
+
+
+## Chapter 2 - Data Descriptioin
+
+### 2.1 Source of the Data
+
+The source dataset of our analysis contains relational set of .csv files which all from Kaggle competition website. The dataset consists of information about 3.4 million grocery orders, distributed across 6 csv files.
+
+### 2.2 Description of dataset
+‘orders.csv’ gives a list of all orders and 1 row per order. 
+(Including variables: order_id, user_id, eval_set(prior, train and test), order_number, oder_dow(the day of week), order_hour_of_day(the hour of day) and days_since_prior_order.)
+
+‘products.csv’ file contains the names of the products with their corresponding product_id. 
+(Including variables: product_id, product_name, aisle_id and department_id.)
+
+‘order_product_prior.csv’ contains previous order contents for all customers.
+(Including variables: order_id, product_id, add_to_cart_order(the sequence of products that the customers put in the cart) and reordered(1 represents the customer has a previous order that contains the product, 0 means not contain).)
+
+‘order_product_trian.csv’ is structurally similar to 'order_product_prior.csv', but it is specially used for data training.
+(Including variables: order_id, product_id, add_to_cart_order, reordered.)
+
+‘departments.csv’ file shows the department information about different kinds of products.
+(Including variables: department_id and department.)
+
+‘aisles.csv’ is presenting the aisles information about each product.
+(Including variables: aisle_id and aisle.)
+
+
+## Chapter 3 - Exploratory Data Analysis 
+
+### 3.1 Orders
+
+In the first part, we will explore ‘order.csv’ file. This data set records each order of each customer in detail, including the number of orders and, specific time of each order and the time interval between two orders. In this data set, all the data is divided into three sets, which are prior, train and test.
+
+#### 3.1.1 Basic analysis
+
+```{r,include=FALSE}
+# basic infomation
+summary(orders)
+str(orders)
+head(orders)
+
+# check missing value
+apply(orders , 2, function(x) any(is.na(x)))
+
+orders$days_since_prior_order[is.na(orders$days_since_prior_order)]<-0
+any(is.na(orders$days_since_prior_order))
+```
+
+We found that there are missing value existed in days_since_prior_order column. The missing value means those are the first order for each user. Here we replace these missing values with zero instead.
+
+#### 3.1.2 How many orders and products of each set?
+```{r,include=TRUE}
+# how many orders in each eval_set?
+ggplot()+
+  geom_bar(aes(x = orders$eval_set, fill = orders$eval_set)) + 
+  scale_x_discrete(labels = c("prior", "train", "test")) +
+  xlab("eval set") +
+  ylab("orders") +
+  ggtitle("The number of orders in each set") +
+  scale_fill_discrete(name = "eval_set") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# how many users in each eval_set?
+orders %>%
+  group_by(eval_set) %>%
+  distinct(user_id) %>%
+  ggplot(aes(x = eval_set,fill = eval_set)) +
+  geom_bar() + 
+  scale_x_discrete(labels = c("prior", "train", "test")) +
+  xlab("eval set") +
+  ylab("users") +
+  ggtitle("The number of users in each set") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+3214,784 orders belong to the prior set, and the rest orders which are the last order of each customer are seperated into train set and test set. The train set has 131,209 observations and the test dataset has 75,000 observations.
+
+There are 206,209 customers in total. Out of which, the last purchase of 131,209 customers are given as train set and we need to predict for the rest 75,000 customers.
+
+#### 3.1.3 How many orders are customers usually ordering?
+```{r,include=T}
+orders %>%
+  group_by(user_id) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = count, fill = factor(count))) +
+  geom_bar() +
+  xlab("orders") +
+  ylab("number of users") +
+  ggtitle("Frequency distribution of the number of orders") +
+  guides(fill = FALSE)+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Customers usually have more than 4 orders, and the maximum number of orders are 100.
+
+#### 3.1.4 When do customers usually place orders？
+```{r,include=T}
+# Hour of week
+ggplot() +
+  geom_bar(aes(x = orders$order_hour_of_day,fill = factor(orders$order_hour_of_day))) + 
+  xlab("hour of day") +
+  ylab("orders") +
+  ggtitle("Orders by hour of day") +
+  scale_fill_discrete(name = "order_hour_of_day") +
+  labs(color = "order_hour_of_day")+
+  guides(fill = FALSE)+
+  theme(plot.title = element_text(hjust = 0.5))
+# Day of week
+ggplot() +
+  geom_bar(aes(x = orders$order_dow,fill = factor(orders$order_dow))) + 
+  xlab("day of week") +
+  ylab("orders") +
+  ggtitle("Orders by day of week") +
+  scale_fill_discrete(name = "order_dow") +
+  theme(plot.title = element_text(hjust = 0.5))+ 
+  guides(fill = FALSE) 
+```
+
+So majority of the orders are made during day time. The 10am hour is the most popular time to make orders, followed by a dip around lunch time and a pickup in the afternoon.Now let us combine the day of week and hour of day to see the distribution. It looks as though 0 represents Saturday and 1 represents Sunday. Wednesday is then the least popular day to make orders.
+
+#### 3.1.5 How often do people order? (time interval between each order）
+```{r,include=T }
+ggplot()+
+  geom_bar(aes(x = orders$days_since_prior_order, fill = factor(orders$days_since_prior_order))) + 
+  xlab("days of prior order") +
+  ylab("count") +
+  ggtitle("Time interval between orders") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  guides(fill = FALSE)
+```
+
+While the most popular relative time between orders is monthly (30 days), there are "local maxima" at weekly (7 days), biweekly (14 days), triweekly (21 days), and quadriweekly (28 days). Looks like customers order once in every week (check the peak at 7 days) or once in a month (peak at 30 days). We could also see smaller peaks at 14, 21 and 28 days (weekly intervals). 
+
+
+### 3.2 Products & Department and Aisles
+
+In this section we combined 'products.csv', 'aisles.csv' and 'departments.csv' to get a new data frame. Next we will have a general understanding of the storage of these products, we will anlysis how many products in each department and aisle.
+
+#### 3.2.1 Basic analysis
+```{r,include=FALSE}
+# merge data(products,aisles,departments)
+product1 <- full_join(products,aisles,by="aisle_id")
+finalproduct <- full_join(product1,departments,by="department_id")
+
+# check
+nra <- nrow(aisles)
+nrd <- nrow(departments)
+nrp <- nrow(products)
+str(finalproduct)
+glimpse(finalproduct)
+head(finalproduct)
+sum_fianlpro <- sum(complete.cases(finalproduct))
+```
+
+There are `r nra` aisles, `r nrd` departments in the data and `r nrp` products in the data set. There are 'r sum_fianlpro` complete rows in the data, hence no missing observation.
+
+#### 3.2.2 How many products in each department?
+```{r}
+prod_by_dept <- finalproduct %>%
+  group_by(department)%>%
+  tally()
+# prod_by_dept
+
+color_range <- colors()
+ggplot(prod_by_dept,aes(reorder(department,-n),n))+
+  geom_bar(stat = "identity", fill= 'blueviolet')+
+  theme(axis.text.x=element_text(angle=45, hjust=1), axis.title.x = element_blank())+
+  labs(title="The number of products in each department", x="departments", y="count")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+# What is the top 5 departments with the most products?
+# dept_top_five <- finalproduct %>%
+#                                        group_by(department)%>%
+#                                        tally()%>%
+#                                        arrange(desc(n))%>%
+#                                        top_n(5,n)
+# 
+# # head(dept_top_five)
+# 
+# #install.packages("plotrix")
+# library(plotrix)
+# pie3D(dept_top_five$n, labels = dept_top_five$department, main = "An exploded 3D pie chart of top 5 Departments", explode=0.1, radius=.9, labelcex = 1.2,  start=0.7)
+```
+
+The top five departments with the most products are personal care, snacks, pantry, beverages and frozen.
+
+#### 3.2.4 How many products in each aisle? 
+```{r}
+finalproduct1 <- subset(finalproduct, aisle != "missing")
+aisle_top_ten <- finalproduct1 %>%
+  drop_na(aisle)%>%
+  group_by(aisle)%>%
+  tally()%>%
+  arrange(desc(n))%>%
+  top_n(10,n)
+# head(aisle_top_ten)
+
+ggplot(aisle_top_ten,aes(reorder(aisle,-n),n))+
+  geom_bar(stat = "identity", fill='coral2')+
+  theme(axis.text.x=element_text(angle=45, hjust=1),axis.title.x = element_blank())+
+  labs(title="The number of products in each aisle", x="aisles", y="count")+
+  theme(plot.title = element_text(hjust = 0.5))
+  
+```
+
+This plot presents the top 10 aisles with highest number of products.
+
+### 3.3 Orders & Department and Aisles
+
+In this section we will explore the sales of different departments and aisles, including order frequency and reordered rate. Then, we are also interested in finding relationship between the sequence of each products putting in the cart by customers and the reordered chance of the product. 
+
+#### 3.3.1 Basic analysis
+```{r}
+# Change data type
+orders <- orders %>% mutate(order_hour_of_day = as.numeric(order_hour_of_day), eval_set = as.factor(eval_set))
+products <- products %>% mutate(product_name = as.factor(product_name))
+aisles <- aisles %>% mutate(aisle = as.factor(aisle))
+departments <- departments %>% mutate(department = as.factor(department))
+
+# Merge the datasets
+product1 <- full_join(products,aisles,by="aisle_id")
+product <- full_join(product1,departments,by="department_id")
+all_order <- rbind(train,prior)
+
+orders_new <- subset(orders, select=c(order_id,user_id))
+all_order_new <- subset(all_order,select = c(order_id,product_id))
+m1 <- full_join(orders_new,all_order_new,by="order_id")
+product_order <- full_join(product,m1,by="product_id")
+```
+
+First, we vertically combine ‘order_product_prior.csv’ and ‘order_product_train.csv’ and create a new data frame called  ‘all_order’.  Since there are no key variable between ‘product’ and ‘orders’, we have to merge these two datasets by merging them to ‘all_order’. Eventually, ‘product_order’  is the final data frame we created to do further analysis.
+
+#### 3.3.2 What is the best selling department?
+```{r,include=TRUE,warning=FALSE}
+product_order %>%
+  drop_na(department) %>%
+  group_by(department) %>%
+  distinct(order_id, .keep_all = T) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x=department,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="The number of orders in each department", x="deparmtment", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=45, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The most three popular departments are produce, dairy eggs and beverages.
+
+#### 3.3.3 How many products are reordered? 
+```{r,warning=FALSE,include=TRUE}
+# the number of reordered products
+tmp <- all_order %>%
+  group_by(reordered) %>%
+  summarize(count = n()) %>%
+  mutate(reordered = as.factor(reordered)) %>%
+  mutate(proportion = count/sum(count))
+
+tmp %>%
+  ggplot(aes(x=reordered,y=count,fill=reordered))+
+  geom_bar(stat="identity")+
+  labs(title="Not reordered vs Reordered product", y="count")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_text(aes(label = count), position = position_dodge(.9)) +
+  scale_x_discrete(labels = c("notReordered", "Reordered"))
+```
+
+There are 19955360 products are reordered by customers, 13863746 products are never reordered. 
+
+#### 3.3.4 What is the most reordered product?
+```{r,warning=FALSE,include=TRUE}
+# most reordered product
+tmp2 <- all_order %>%
+  group_by(product_id) %>%
+  summarize(proportion_reordered = mean(reordered), n=n()) %>%
+  top_n(10,wt=proportion_reordered) %>%
+  arrange(desc(proportion_reordered)) %>%
+  left_join(product,by="product_id")
+
+tmp2 %>%
+  ggplot(aes(x=reorder(product_name,-proportion_reordered), y=proportion_reordered))+
+  geom_bar(stat="identity",fill="red")+
+  theme(axis.text.x=element_text(angle=45, hjust=1),axis.title.x = element_blank())+coord_cartesian(ylim=c(0.85,0.95))+
+  labs(title="TOP 10 reordered ratio", x="products", y="reordered rate")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The top three products with highest reordered rate are Raw Veggie Wrappers, Serenity Ultimate Extrema Overnight Pads and Orange Energy Shots.
+
+#### 3.3.5 Which department has the highest reorder ratio?
+```{r,include=TRUE}
+tmp <- all_order %>%
+  group_by(product_id)%>%
+  summarize(proportion_reordered = mean(reordered)) %>%
+  left_join(product,by="product_id")
+
+tmp %>%
+  group_by(department) %>%
+  summarize(depart_reordered = mean(proportion_reordered)) %>%
+  ggplot(aes(x=department,y=depart_reordered))+
+  geom_point(color="red", size=2)+
+  labs(title="Reordered rate in each department", x="departments", y="reordered rate")+
+  theme(axis.text.x=element_text(angle=45, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Personal care has lowest reorder ratio and dairy eggs have highest reorder ratio.
+
+#### 3.3.6 Is there any relationship between the sequence of adding to cart and reordered chance？
+```{r,warning=FALSE,include=TRUE}
+# plot
+tmp3 <- all_order %>%
+  group_by(add_to_cart_order)%>%
+  summarize(proportion_reordered = mean(reordered))
+
+tmp3 %>%
+  ggplot(aes(x=add_to_cart_order,y=proportion_reordered))+
+  geom_point(color="red")+
+  xlim(c(0,70))+
+  ylim(c(0.3,0.7))+
+  labs(title="Add to cart order - Reorder ratio", x="add to cart order", y="reordered rate")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+# t-test
+t.test(add_to_cart_order~reordered,data=prior)
+```
+
+This graph shows that products placed initially in the cart are more likely to be reorderd than one placed later in the cart. We also did t-test to verify whether the sequence of products adding to cart are siginificantly different between reordered products and not reordered products. We can conclude from the results showing the p-value is smaller than 0.05 that the sequence of products adding to cart significantly influence whether the products are reordered.
