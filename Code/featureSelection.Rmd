@@ -18,16 +18,33 @@ library("dplyr")
 ```{r prepare}
 aisles <- read.csv("../DataSet/aisles.csv")
 departments <- read.csv("../DataSet/departments.csv")
-o.p.p <- read.csv("../DataSet/order_products__prior.csv")
-o.p.t <- read.csv("../DataSet/order_products__train.csv")
+prior <- read.csv("../DataSet/order_products__prior.csv")
+train <- read.csv("../DataSet/order_products__train.csv")
 orders <- read.csv("../DataSet/orders.csv")
 products <- read.csv("../DataSet/products.csv")
+
+# change the data set num or rows, origin has over 6.42 million rows, almost 1GB. Now just keep user_id <= 10000 data
+
+orders <- subset(orders, user_id <= 10000)
+
+orders_prior <- subset(orders, eval_set == 'prior')
+orders_train <- subset(orders, eval_set == 'train')
+train2 <- subset(train, select = c(order_id, product_id, reordered))
+colnames(train2)[3] <- "ytrain"
+orders_train <- subset(orders_train, select = c(order_id, user_id))
+mergeTmp <- merge(orders_train, train2, by = 'order_id')
+mergeTmp <- mergeTmp[,-1]
+
+
 ```
 
 ```{r preprocess}
 orders[is.na(orders)] <- 0
-merge1 <- merge(o.p.p, orders, by = 'order_id')
-orders_prior <- subset(orders, eval_set == 'prior')
+orders_prior[is.na(orders_prior)] <- 0
+merge1 <- merge(prior, orders, by = 'order_id')
+merge1 <- subset(merge1, select = c(order_id, product_id, add_to_cart_order, user_id, order_number, order_dow, order_hour_of_day, days_since_prior_order, reordered))
+# merge1 <- merge(merge1, mergeTmp, by = c("user_id","product_id"), all.x = TRUE)
+# merge1[is.na(merge1)] <- 0
 ```
 
 ```{r f1}
@@ -98,14 +115,14 @@ userFeature <- merge(userFeature, feature7, by = 'user_id')
 
 ```{r f8}
 # num of orders of products
-feature8 <- o.p.p %>%
+feature8 <- prior %>%
   group_by(product_id) %>%
   summarise(n.o.p = n())
 ```
 
 ```{r f9}
 # repeat order rate of product
-feature9 <- o.p.p %>%
+feature9 <- prior %>%
   group_by(product_id) %>%
   summarise(ror.p = mean(reordered))
 ```
@@ -122,7 +139,7 @@ feature10 <- subset(feature10, select = c(product_id, department_id, ror.pd))
 
 ```{r f11}
 # avg position
-feature11 <- o.p.p %>%
+feature11 <- prior %>%
   group_by(product_id) %>%
   summarise(avg.p = mean(add_to_cart_order))
 ```
@@ -149,14 +166,14 @@ t2 <- merge1 %>%
   group_by(user_id, product_id) %>%
   summarise(f.o.n = min(order_number))
 feature13 <- merge(t1, t2, by = 'user_id') %>%
-  mutate(ror.pu = feature12$t.b / (o.m - f.o.n))
+  mutate(ror.pu = feature12$t.b / (o.m - f.o.n + 1))
 ```
 
 ```{r f14}
 # last 4 order
 feature14 <- merge1 %>%
   group_by(user_id)%>%
-  mutate(differ = max(order_number) - order_number) %>%
+  mutate(differ = max(order_number) - order_number + 1) %>%
   filter(differ <= 4) %>%
   group_by(user_id, product_id) %>%
   summarise(l4o = n() / 4)
@@ -170,6 +187,10 @@ upFeature <- merge(upFeature, feature14, by = c('user_id', 'product_id'))
 ```{r allFeature}
 allFeature <- merge(upFeature, productFeature, by = 'product_id')
 allFeature <- merge(allFeature,userFeature, by = 'user_id')
-allFeature[ror.pu == Inf] <- 0
+allFeature <- merge(allFeature, mergeTmp, by = c("user_id", "product_id"), all.x = TRUE)
+allFeature[is.na(allFeature)] <- 0
+```
 
+```{r save}
+write.csv(allFeature, file = "features.csv")
 ```

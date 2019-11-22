@@ -1,0 +1,96 @@
+---
+title: "DS_EDA_Ruth"
+author: "Cherry"
+date: "11/11/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(readr) 
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(knitr)
+library(tidyr)
+products <- read.csv("~/Downloads/instacart-market-basket-analysis/products.csv")
+aisles <- read.csv("~/Downloads/instacart-market-basket-analysis/aisles.csv")
+departments <- read.csv("~/Downloads/instacart-market-basket-analysis/departments.csv")
+
+product1 <- full_join(products,aisles,by="aisle_id")
+finalproduct <- full_join(product1,departments,by="department_id")
+```
+
+
+### How many products/aisles/departments?
+```{r}
+nrow(aisles)
+nrow(departments)
+nrow(products)
+str(finalproduct)
+```
+* There are `r nrow(aisles)` aisles in the data
+* There are `r nrow(departments)` departments in the data
+* There are `r nrow(products)` products in the data
+
+### Check the 'finalproduct' dataset(eg:head,structure,missing value)
+```{r}
+glimpse(finalproduct)
+head(finalproduct)
+sum(complete.cases(finalproduct))
+```
+There are 'r sum(complete.cases(finalproduct))` complete rows in the data, hence no missing observation
+
+### How many products in each department?
+```{r}
+prod_by_dept <- finalproduct %>%
+                                      group_by(department)%>%
+                                       tally()
+prod_by_dept
+color_range <- colors()
+ggplot(prod_by_dept,aes(reorder(department,-n),n))+geom_bar(stat = "identity", fill= 'blueviolet')+
+                                      theme(axis.text.x=element_text(angle=45, hjust=1), axis.title.x = element_blank())
+```
+
+
+### Top 5 departments with the most products?
+```{r}
+dept_top_five <- finalproduct %>%
+                                       group_by(department)%>%
+                                       tally()%>%
+                                       arrange(desc(n))%>%
+                                       top_n(5,n)
+
+head(dept_top_five)
+
+#install.packages("plotrix")
+library(plotrix)
+pie3D(dept_top_five$n, labels = dept_top_five$department, main = "An exploded 3D pie chart of top 5 Departments", explode=0.1, radius=.9, labelcex = 1.2,  start=0.7)
+```
+
+
+### How many products in each aisle?
+```{r}
+prod_by_aisle <- finalproduct %>% group_by(aisle)%>% tally()%>%
+                                       arrange(desc(n))
+                                       
+prod_by_aisle
+```
+
+###  Top 10 aisles with the most products?
+```{r}
+aisle_top_ten <- finalproduct %>%
+                                       group_by(aisle)%>%
+                                       tally()%>%
+                                       arrange(desc(n))%>%
+                                       top_n(10,n)
+head(aisle_top_ten)
+ggplot(aisle_top_ten,aes(reorder(aisle,-n),n))+geom_bar(stat = "identity", fill='coral2')+
+                                      theme(axis.text.x=element_text(angle=45, hjust=1),axis.title.x = element_blank())
+```
+
+
