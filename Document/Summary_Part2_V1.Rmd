@@ -1,0 +1,508 @@
+---
+title: "Feature_Model Summary"
+author: "Cherry"
+date: "11/18/2019"
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+  word_document: default
+---
+
+```{r basicfcn, include=FALSE}
+# can add quietly=T option to the require() function
+loadPkg = function(x) { if (!require(x,character.only=T, quietly =T)) { install.packages(x,dep=T,repos="http://cran.us.r-project.org"); if(!require(x,character.only=T)) stop("Package not found") } }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# Load the library
+library(readr) 
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(corrplot)
+library(knitr)
+loadPkg("caret")
+```
+
+```{r}
+# Load the dataset
+products <- read.csv("products.csv")
+aisles <- read.csv("aisles.csv")
+departments <- read.csv("departments.csv")
+orders <- read.csv("orders.csv")
+train <- read.csv("order_products__train.csv")
+prior <- read.csv("order_products__prior.csv")
+```
+
+
+## Chapter 4 - Feature Selection
+
+We created three main types of features. More details are showing as below. 
+
+```{r prepare}
+# For easier modeling, decrease the rows of data set to get the new feature data set (last version of feature data set is over 6.42 million rows and almost 1 GB)
+orders <- subset(orders, user_id <= 10000)
+
+orders_prior <- subset(orders, eval_set == 'prior')
+orders_train <- subset(orders, eval_set == 'train')
+train2 <- subset(train, select = c(order_id, product_id, reordered))
+colnames(train2)[3] <- "ytrain"
+orders_train <- subset(orders_train, select = c(order_id, user_id))
+mergeTmp <- merge(orders_train, train2, by = 'order_id')
+mergeTmp <- mergeTmp[,-1]
+```
+
+```{r preprocess}
+orders[is.na(orders)] <- 0
+orders_prior[is.na(orders_prior)] <- 0
+merge1 <- merge(prior, orders, by = 'order_id')
+merge1 <- subset(merge1, select = c(order_id, product_id, add_to_cart_order, user_id, order_number, order_dow, order_hour_of_day, days_since_prior_order, reordered))
+# merge1 <- merge(merge1, mergeTmp, by = c("user_id","product_id"), all.x = TRUE)
+# merge1[is.na(merge1)] <- 0
+```
+
+### 4.1 User features
+
+User features are related to the ordering information of each customer. Each row of these features specifies distinct user.
+
+```{r user_features}
+# num of orders of users
+feature1 <- merge1 %>%
+  group_by(user_id) %>%
+  summarise(n.o.u = max(order_number))
+
+# num of products of users
+feature2 <- merge1 %>%
+  group_by(user_id) %>%
+  #distinct(product_id, .keep_all = TRUE) %>%
+  summarise(n.p.u = n())
+
+# avg products of orders of users
+feature3 <- merge(feature1, feature2, by = 'user_id') %>%
+  mutate(avg.pou = n.p.u / n.o.u)
+
+# day of max order
+feature4 <- merge1 %>%
+  group_by(user_id,order_dow) %>%
+  summarise(count = n()) %>% 
+  group_by(user_id) %>%
+  filter(count == max(count))
+feature4 <- feature4[,-3]
+
+colnames(feature4)[2] <- "d.m.o"
+
+# time of day of max order
+feature5 <- merge1 %>%
+  group_by(user_id, order_hour_of_day) %>%
+  summarise(count = n()) %>%
+  group_by(user_id) %>%
+  filter(count == max(count))
+feature5 <- feature5[,-3]
+
+colnames(feature5)[2] <- "t.m.o"
+
+# repeat order rate of user
+feature6 <- merge1 %>%
+  group_by(user_id) %>%
+  summarise(ror.u = mean(reordered))
+
+# oreder frequency
+feature7 <- orders_prior %>%
+  group_by(user_id) %>%
+  summarise(o.f = sum(days_since_prior_order) / n())
+```
+
+n.o.u(feature1): The number of orders for each user. 
+This feature is acquired by grouping users and by counting the number of orders.
+
+n.p.u(feature2): The number of products for each user.
+This feature is calculated by grouping users and by counting the total number of products.
+
+avg.pou(feature3): Average number of products per user ordered.
+This feature is equal to the total amount of products purchased by per user divided by the number of orders per user.
+
+d.m.p(feature4): The day on which each user ordered most frequently.
+We calculated the number of products per user ordered in each day and selected the day on which per user placed most number of orders as the value of this feature.
+
+t.m.o(feature5): The time of a day on which each user ordered most frequently.
+We calculated the number of products in each hour per user ordered and selected the hour on which per user placed most orders as the value of this feature.
+
+ror.u(feature6): Reordered ratio per user.
+Reordered ratio is the number of reordered products divided by the total number of products for each user.
+
+o.f(feature7): Shopping frequency for each user.
+This variable is derived from dividing the total time interval of orders by the total number of orders per user.
+
+```{r userFeature, include=TRUE}
+userFeature <- merge(feature3, feature4, by = 'user_id')
+userFeature <- merge(userFeature, feature5, by = 'user_id')
+userFeature <- merge(userFeature, feature6, by = 'user_id')
+userFeature <- merge(userFeature, feature7, by = 'user_id')
+head(userFeature)
+```
+
+We combine all the user features above into a new data frame. 'user_id' is the key variable in this data frame.
+
+### 4.2 Product features
+
+These features are specific to products, meaning that each row of these features represents a product. We totally created four product features.
+
+```{r f8-f11}
+# num of orders of products
+feature8 <- prior %>%
+  group_by(product_id) %>%
+  summarise(n.o.p = n())
+
+# repeat order rate of product
+feature9 <- prior %>%
+  group_by(product_id) %>%
+  summarise(ror.p = mean(reordered))
+
+# repeat order rate of product department
+d_p = merge(departments, products, by = 'department_id')
+d_p_1 = merge(d_p, feature9, by = 'product_id')
+feature10 <- d_p_1 %>%
+  group_by(department_id) %>%
+  mutate(ror.pd = mean(ror.p))
+feature10 <- subset(feature10, select = c(product_id, department_id, ror.pd))
+
+# avg position
+feature11 <- prior %>%
+  group_by(product_id) %>%
+  summarise(avg.p = mean(add_to_cart_order))
+```
+
+n.o.p(feature8): Ordering frequency for each product. 
+This is acquired by grouping product and by counting the number of orders for each product.
+
+ror.p(feature9): Reordered ratio for each product. 
+This feature is obtained by grouping product and by calculating the mean of reordered products.
+
+ror.pd(feature10): Average sequence in the cart for each product. 
+We grouped product and then calculated the mean of the sequence of each product in the cart.
+
+avg.p(feature11): Reordered ratio for each department. 
+We grouped departments and then calculated the mean of 'reorder_ratio_prod' in each group.
+
+```{r productFeature,include=TRUE}
+productFeature <- merge(feature8, feature9, by = 'product_id')
+productFeature <- merge(productFeature, feature10, by = 'product_id')
+productFeature <- merge(productFeature, feature11, by = 'product_id')
+head(productFeature)
+```
+
+Next, we merged these product features together. 'product_id' is the key variable in this data frame.
+
+### 4.3 User & Product features
+
+These features are the combination of users info and products info. So the data frame we created will definitely contain both 'user_id' and 'product_id'. Here are the relevant features.
+
+```{r f12-f14}
+# time of bought
+feature12 <- merge1 %>%
+  group_by(user_id, product_id) %>%
+  summarise(t.b = n())
+
+# repeat order rate of product of user
+t1 <- merge1 %>%
+  group_by(user_id) %>%
+  summarise(o.m = max(order_number))
+
+feature13 <- merge1 %>%
+  group_by(user_id, product_id) %>%
+  summarise(f.o.n = min(order_number))
+
+feature14 <- merge(t1, feature13, by = 'user_id') %>%
+  mutate(ror.pu = feature12$t.b / (o.m - f.o.n + 1))
+
+# last 4 order
+feature15 <- merge1 %>%
+  group_by(user_id)%>%
+  mutate(differ = max(order_number) - order_number + 1) %>%
+  filter(differ <= 4) %>%
+  group_by(user_id, product_id) %>%
+  summarise(l4o = n() / 4)
+```
+
+t.b(feature12): Times of each product bought by each user. 
+It is the count of orders after grouping 'user_id' and 'product_id'. 
+
+f.o.n(feature13): The order number in which customer bought the product.
+We first calculated the total number of orders for each user by counting the orders after grouping users and products. Then, we counted in which order was the first time that each user bought each product. 
+
+ror.pu(feature14): The ratio at which each product is reordered by each user. 
+Based on f.o.n(feature13), we set 'n' as the number of orders per user after first time shopping. Finally, we divided the times of each product that per user bought by 'n' and assigned the value to this feature.
+
+l4o(feature15): The ratio of each product bought in each user's last four orders.
+We first calculated the last four orders per user by reversing the order number for each product and then creating a new column called 'differ' and selecting orders where 'differ' is smaller than 5. Next, we counted the 'differ' per user and then divided it by 4.
+
+```{r upFeature, include=TRUE}
+upFeature <- merge(feature12, feature13, by = c('user_id', 'product_id'))
+upFeature <- merge(upFeature, feature14, by = c('user_id', 'product_id'))
+head(upFeature)
+```
+
+Here, we merged these new features we just created. We also noticed that 'l4o' has missing values. Maybe because the customer didn't buy this product in their last four orders. For this case, we filled the NaN with 0.
+
+```{r allFeature,include=F}
+allFeature <- merge(upFeature, productFeature, by = 'product_id')
+allFeature <- merge(allFeature,userFeature, by = 'user_id')
+allFeature <- merge(allFeature, mergeTmp, by = c("user_id", "product_id"), all.x = TRUE)
+allFeature[is.na(allFeature)] <- 0
+head(allFeature)
+
+# write.csv(allFeature, file = "features.csv")
+# write.csv(allFeature, file = "subFeatures.csv")
+```
+```{r,include=F}
+originFeatures <- read.csv("features.csv")
+features <- read.csv("subFeatures.csv")
+nr1 <- nrow(originFeatures)
+nr2 <- nrow(features)
+```
+```{r,include=TRUE}
+knitr::kable(head(features))
+```
+
+Finally, we created 15 features and combined them into a new data frame called 'allFeature' and we save it as 'features.csv'. Since this file contains `r nr1` observations which are computational expensive and time consuming for R to run models, so we use subset function and select the first 10,000 and saved it as a new data set called 'subFeatures.csv', which has `r nr2` observations. Based on this new dataset, we can continue building our models.
+
+
+## Chapter 5 - Models and Evaluation
+
+### 5.1 Smart question: What products will the customers buy in thier next order? 
+
+Our goal is to use this anonymized data on customer orders over time to predict which previously purchased products will be in a user’s next order. The target is whether or not the customers will buy this specific product in the future (0 means will not buy, 1 means will buy), features are the 15 ones we just created. Since our target(dependent variable) is binary, we will use logistic regression for our first model. Then, we will deploy PCA to see whether those 15 features can be decomposed to several components and to build a PCR model. Because it is a classification question, we will also use KNN and Decision Tree algorithms for next models.
+
+### 5.2 Models
+
+```{r,include=F}
+#split the whole data set to train set and test set
+set.seed(1)
+shop_train_rows = sample(1:nrow(features),
+                              round(0.8 * nrow(features), 0),  
+                              replace = FALSE)
+
+
+length(shop_train_rows) / nrow(features)
+
+shop_train = features[shop_train_rows,c(4,6:10,12:20)] 
+shop_train_label = features[shop_train_rows,"ytrain"]
+shop_test = features[-shop_train_rows,c(4,6:10,12:20)] 
+shop_test_label = features[-shop_train_rows,"ytrain"]
+
+# Check the number of rows in each set.
+nrow(shop_train)
+nrow(shop_test)
+
+```
+
+Before buliding models, we first split the data into training set and testing set. The training set has 246155 observations while testing set contains 61539 observations.
+
+#### 5.2.1 Logistic Regression
+```{r,include=TRUE}
+shoplogit <- glm(shop_train_label ~ t.b + f.o.n + ror.pu + l4o + n.o.p + ror.p  + ror.pd + avg.p + n.o.u + n.p.u + avg.pou + d.m.o + t.m.o + ror.u + o.f, data=shop_train, family="binomial")
+summary(shoplogit)
+```
+
+The result of logistic regression shows that t.b (times of each product bought by each user), f.o.n (the order number in which customer bought the product), ror.pu (the ratio at which each product is reordered by each user), l4o (the ratio of each product bought in each user's last four orders), ror.p(reordered ratio for each product), ror.pd (average sequence in the cart for each product), avg.pou (average number of products per user ordered), d.m.p (the day on which each user ordered most frequently), ror.u (reordered ratio per user) and o.f(shopping frequency for each user) are significantly influence the choice of customers in their next orders.
+
+```{r,include=F}
+# logistic regression model evaluation
+# AUC
+loadPkg("pROC")
+shop_test$predict1<- predict(shoplogit, shop_test, type=c("response"))
+h1 <- roc(shop_test_label ~ predict1, data=shop_test)
+auc(h1)
+```
+```{r,include=T}
+plot(h1)
+```
+```{r,include=F}
+#McFadden
+loadPkg("pscl") 
+surLogitpr2_2 = pR2(shoplogit)
+surLogitpr2_2
+surLogitpr2_2['McFadden']
+```
+
+Since area under the curve is 0.74, which is smaller than 0.8. With the McFadden value, only 10.93% of target (will buy or not buy) is explained by the explanatory variables in the model. This model actually is not as good as we expected.
+
+```{r acc, include=TRUE, warning=FALSE}
+shop_test <- shop_test %>% mutate(model_pred = 1 * (predict1 > .53) + 0)
+shop_test <- shop_test %>% mutate(accurate = 1 * (model_pred == shop_test_label))
+acc <- sum(shop_test$accurate) / nrow(shop_test)
+cm_logit <- confusionMatrix( factor(shop_test$model_pred), reference = factor(shop_test_label))
+knitr::kable(cm_logit$byClass)
+```
+
+Using confusion matrix to calculate accuracy and other evaluation parameters, we found that the F1 score is 0.9673, the sensitivity (recall value) is 0.9978, the specificity is 0.0283, the accuracy is 0.9369 and the precision value is 0.9387.
+
+
+#### 5.2.2 PCA and PCR
+```{r,include=F}
+dfpca <- features[c(4:10,12:21)]
+pca <- prcomp(dfpca,scale=TRUE)
+summary(pca)
+```
+```{r,include=F}
+pr.var <- (pca$sdev^2)
+pve <- pr.var/sum(pr.var)
+cumsum(pve)
+```
+```{r, include=TRUE}
+plot(cumsum(pve), xlab="Principal Component (standardized)", ylab ="Cumulative Proportion of Variance Explained",ylim=c(0,1),type="b")
+```
+
+From the plot we know that 8 compenonts of the standardized analysis compose around 80% of the variance, 11 compenonts compose approximate 90% of the variance and 13 components carry 99% of the variance. So the curve on the graph is gradually increasing, meaning that there is no one component that carries a lot of variance.
+
+```{r,include=F}
+# PCR
+loadPkg("pls")
+pcr.fit1=pcr(ytrain~.,data=dfpca,scale=TRUE,validation ="CV")
+summary(pcr.fit1)
+```
+```{r,include=TRUE}
+validationplot(pcr.fit1 ,val.type="MSEP",legend="topright")
+validationplot(pcr.fit1,val.type="R2")
+```
+
+We choose Cross-validation (CV) method to evaluate our model. The first plot is mean square error prediction (MSE) and the second one is R squared (R2). Starting with the fourth component, the MSE value is becoming low，and at the same time that the R2 value gets bigger from the fourth one.
+
+#### 5.2.3 KNN
+
+```{r,include=F}
+# loadPkg("caret") 
+# cmtable <- data.frame(matrix(ncol = 0, nrow = 11))
+# for (k in seq(1,21,by=2)){
+#   class_knn=knn(train = shop_train,    #<- training set cases
+#                   test = shop_test,       #<- test set cases
+#                   cl = shop_train_label,     #<- category for classification
+#                   k = k,                #<- number of neighbors considered
+#                   )  
+#   cm <- confusionMatrix( factor(class_knn), reference = factor(shop_test_label))
+#   cmtable<- cbind(cmtable,data.frame(cm$byClass))
+# }
+# cmtable <- data.frame(cmtable)
+# x <- c(paste0("k=", seq(1,21,by=2)))
+# colnames(cmtable) <- x
+```
+
+We built model from 1NN to 21NN (k is odd number) to see what is the best k value and used confusion Matrix for evaluation. This part takes a long time so we post the result as "knn_accuracy_table.csv" which is saved in the 'DataSet' of our Github.
+
+```{r,include=T}
+cmtable <- read.csv("knn_accuracy_table.csv")
+cmtable <- data.frame(cmtable[,-1], row.names = cmtable[,1])
+
+
+#choose parameters
+para_index=c(2,5,6,7)
+cmtable1=cmtable[para_index,]
+knitr::kable(cmtable)
+```
+
+```{r,include=T}
+# set up the plot
+xrange <- range(1,21)
+yrange <- range(0,1)
+plot(xrange, yrange, type="n", xlab="k value",
+   ylab="value",xaxt="n" )
+axis(1,at=seq(1,21,2))
+linetype <- c(1:11)
+colors <- rainbow(15)
+
+#add lines
+for (i in seq(1,4)){
+  para <- cmtable1[i,]
+  lines(seq(1,21,by=2),para, type="l", lwd=1.5,lty=linetype[1], col=colors[i])
+}
+  
+title("Parameters of different k")
+legend("bottomright", rownames(cmtable1), cex=0.8, col=colors,
+   lty=1, title="Evaluation Parameters")
+```
+
+We tried k value as all odd numbers from 1 to 21, and found that when k value is 15, the F1 score is the highest, which is 0.9398. We chose a small k value to ensure the complexity of the model. It seems 15-nearest neighbors is a decent choice. In this case, the sensitivity is 0.9984, the specificity is 0.0096, the presision value is 0.8876.
+
+#### 5.2.4 Decision Tree
+```{r,include=F}
+library("rpart")
+shoptree <- rpart(shop_train_label ~ t.b + f.o.n + ror.pu + l4o + n.o.p + ror.p  + ror.pd + avg.p + n.o.u + n.p.u + avg.pou + d.m.o + t.m.o + ror.u + o.f, data=shop_train, method="class",control=rpart.control(minbucket=20,cp=0.0001))
+
+summary(shoptree)
+plot(shoptree, uniform=TRUE, main="Classification Tree")
+text(shoptree, use.n=TRUE, all=TRUE, cex=.8)
+```
+
+```{r, fancyplot, include=TRUE, warning=FALSE} 
+# fancyplot
+loadPkg("rpart.plot")
+rpart.plot(shoptree)
+loadPkg("rattle") # For fancyRpartPlot (Trees) Answer "no" on installing from binary source
+fancyRpartPlot(shoptree, sub = '')
+
+shop_test$predict2 <- predict(shoptree, shop_test, type = "class")
+```
+
+```{r, include=T,message=F,warning=FALSE}
+# model evaluation:
+loadPkg("caret") 
+cm = confusionMatrix(factor(shop_test$predict2), reference = factor(shop_test_label) )
+# print('Overall: ')
+# cm$overall
+cm$overall['Accuracy']
+# print('Class: ')
+knitr::kable(cm$byClass)
+```
+
+The result of decision tree model shows that the F1 score is 0.9397. We can also notice that sensitivity is (recall rate) is 0.9910, specificity is 0.0736, overall accuracy is 0.8871 and precision is 0.8933.
+
+
+## Chapter 6 - Summary
+```{r}
+target_1<-sum(features$ytrain==1)
+target_0<-sum(features$ytrain==0)
+```
+
+First, we tried four models, including Logistic Regession, PCA/PCR, KNN and Decision Tree. Since the PCA results shows there is no significant effect of dimension reduction, we only compared the other three models. The F1 score of these three models are pretty close, Logistic Regression is 0.9673, KNN is 0.9398 and Decision Tree is 0.9396.
+
+Second, although the F1 score of the three models are relatively high, we found that all the specificity value are low. This indicates that the high accuracy is due to the high proportion of true positive, which means that we correctly predict that what kinds of products that customers will not buy rather than they will buy, that is, we exclude many things that customers may not reorder. So, when it comes to what products the customer will buy next times, there are relative small amount of cases in the model where the predicted value is the same as the observed value. The problem arises because the values in the target are not evenly distributed, since there are only `r target_1` observations of 1 but `r target_0` observations of 0, obviously there are too many targets where values are 0. However, we can improve on this with oversampling method.
+
+Third, due to the large amount of data, we only selected the first 10,000 users as our modeling sample. Even though this is the easiest way to achieve subset, it may not as propitiate as random sampling. However, users are independent with each other, so the way we select the data will not influece the modeling process.
+
+
+## Chapter 7 - Reference
+
+“The Instacart Online Grocery Shopping Dataset 2017”, Accessed from https://www.instacart.com/datasets/grocery-shopping-2017
+
+## Appendix
+### Data source
+Link:https://www.kaggle.com/c/instacart-market-basket-analysis/data
+
+### Task divisions
+Ruth: EDA（code+analysis） + Slides
+
+Zixuan: EDA（code+analysis）+ summary report
+
+Qing: EDA（code+analysis）+ feature selection(idea+analysis)
+
+Kaiqi: data preprocessing(code) + feature selection(code)
+
+Zichu: model building and evaluation(code)
+
+### Github
+Githublink: https://github.com/Kelv1nYu/ItDsProj2
+
+
+
+
+
+
+
+
+
+
+
