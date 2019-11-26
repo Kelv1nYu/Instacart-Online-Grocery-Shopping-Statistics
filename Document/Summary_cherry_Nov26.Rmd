@@ -1,0 +1,983 @@
+---
+title: "Summary Report"
+author: "Group: Cherry"
+date: "11/17/2019"
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+  word_document: default
+---
+
+```{r basicfcn, include=F}
+# can add quietly=T option to the require() function
+loadPkg = function(x) { if (!require(x,character.only=T, quietly =T)) { install.packages(x,dep=T,repos="http://cran.us.r-project.org"); if(!require(x,character.only=T)) stop("Package not found") } }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# Load the library
+library(readr) 
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(corrplot)
+library(knitr)
+loadPkg("caret")
+
+# Load the dataset
+products <- read.csv("products.csv")
+aisles <- read.csv("aisles.csv")
+departments <- read.csv("departments.csv")
+orders <- read.csv("orders.csv")
+train <- read.csv("order_products__train.csv")
+prior <- read.csv("order_products__prior.csv")
+```
+
+
+## Chapter 1 - Introduction
+Every time when you shop from meticulously planned grocery lists you will leave the marks of browsing or ordering. Instacart's grocery ordering and delivery app aims to make it easy to fill your refrigerator and pantry with your personal favorites and staples when you need them. But how they can know what kinds of food are exactly what you need? 
+
+Instacart released a dataset, “The Instacart Online Grocery Shopping Dataset 2017”, which contains a sample of over 3 million grocery orders from more than 200,000 Instacart users. For each user, they provided their orders and the sequence of products in each orders. They also provided the time including the week and the hour of day the order was placed, and the relative time between orders. Using this data to test models, Instacart are enable to predict products that a user will buy again, try for the first time or add to cart next time. 
+
+Our project using this datasets which are sourced from Kaggle aims to predict which previously purchased products would be in a consumer’s next order. This report focuses on exploratory data analysis and model prediction of orders and products according to Instacart online transaction, the rest of this report contains five chapters. 
+
+
+## Chapter 2 - Data Descriptioin
+
+### 2.1 Source of the Data
+
+The source dataset of our analysis contains relational set of .csv files which all from Kaggle competition website. The dataset consists of information about 3.4 million grocery orders, distributed across 6 csv files.
+
+### 2.2 Description of dataset
+‘orders.csv’ gives a list of all orders and 1 row per order. 
+(Including variables: order_id, user_id, eval_set(prior, train and test), order_number, oder_dow(the day of week), order_hour_of_day(the hour of day) and days_since_prior_order.)
+
+‘products.csv’ file contains the names of the products with their corresponding product_id. 
+(Including variables: product_id, product_name, aisle_id and department_id.)
+
+‘order_product_prior.csv’ contains previous order contents for all customers.
+(Including variables: order_id, product_id, add_to_cart_order(the sequence of products that the customers put in the cart) and reordered(1 represents the customer has a previous order that contains the product, 0 means not contain).)
+
+‘order_product_trian.csv’ is structurally similar to 'order_product_prior.csv', but it is specially used for data training.
+(Including variables: order_id, product_id, add_to_cart_order, reordered.)
+
+‘departments.csv’ file shows the department information about different kinds of products.
+(Including variables: department_id and department.)
+
+‘aisles.csv’ is presenting the aisles information about each product.
+(Including variables: aisle_id and aisle.)
+
+
+## Chapter 3 - Exploratory Data Analysis 
+
+### 3.1 Orders
+
+In the first part, we will explore ‘order.csv’ file. This data set records each order of each customer in detail, including the number of orders and, specific time of each order and the time interval between two orders. In this data set, all the data is divided into three sets, which are prior, train and test.
+
+#### 3.1.1 Basic analysis
+
+```{r,include=FALSE}
+# basic infomation
+summary(orders)
+str(orders)
+head(orders)
+
+# check missing value
+apply(orders , 2, function(x) any(is.na(x)))
+
+orders$days_since_prior_order[is.na(orders$days_since_prior_order)]<-0
+any(is.na(orders$days_since_prior_order))
+```
+
+We found that there are missing value existed in days_since_prior_order column. The missing value means those are the first order for each user. Here we replace these missing values with zero instead.
+
+#### 3.1.2 How many orders and products of each set?
+```{r,include=TRUE}
+# how many orders in each eval_set?
+ggplot()+
+  geom_bar(aes(x = orders$eval_set, fill = orders$eval_set)) + 
+  scale_x_discrete(labels = c("prior", "train", "test")) +
+  xlab("eval set") +
+  ylab("orders") +
+  ggtitle("The number of orders in each set") +
+  scale_fill_discrete(name = "eval_set") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# how many users in each eval_set?
+orders %>%
+  group_by(eval_set) %>%
+  distinct(user_id) %>%
+  ggplot(aes(x = eval_set,fill = eval_set)) +
+  geom_bar() + 
+  scale_x_discrete(labels = c("prior", "train", "test")) +
+  xlab("eval set") +
+  ylab("users") +
+  ggtitle("The number of users in each set") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+3214,784 orders belong to the prior set, and the rest orders which are the last order of each customer are seperated into train set and test set. The train set has 131,209 observations and the test dataset has 75,000 observations.
+
+There are 206,209 customers in total. Out of which, the last purchase of 75,000 customers are given as train set and we will use this set to build our models.
+
+#### 3.1.3 How many orders are customers usually ordering?
+```{r,include=T}
+orders %>%
+  group_by(user_id) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = count, fill = factor(count))) +
+  geom_bar() +
+  xlab("orders") +
+  ylab("number of users") +
+  ggtitle("Frequency distribution of the number of orders") +
+  guides(fill = FALSE)+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Customers usually have more than 4 orders, and the maximum number of orders are 100.
+
+#### 3.1.4 When do customers usually place orders？
+```{r,include=T}
+# Hour of week
+ggplot() +
+  geom_bar(aes(x = orders$order_hour_of_day,fill = factor(orders$order_hour_of_day))) + 
+  xlab("hour of day") +
+  ylab("orders") +
+  ggtitle("Orders by hour of day") +
+  scale_fill_discrete(name = "order_hour_of_day") +
+  labs(color = "order_hour_of_day")+
+  guides(fill = FALSE)+
+  theme(plot.title = element_text(hjust = 0.5))
+# Day of week
+ggplot() +
+  geom_bar(aes(x = orders$order_dow,fill = factor(orders$order_dow))) + 
+  xlab("day of week") +
+  ylab("orders") +
+  ggtitle("Orders by day of week") +
+  scale_fill_discrete(name = "order_dow") +
+  theme(plot.title = element_text(hjust = 0.5))+ 
+  guides(fill = FALSE) 
+```
+
+So majority of the orders are made during day time. The 10am hour is the most popular time to make orders, followed by a dip around lunch time and a pickup in the afternoon.Now let us combine the day of week and hour of day to see the distribution. It looks as though 0 represents Saturday and 1 represents Sunday. Wednesday is then the least popular day to make orders.
+
+#### 3.1.5 How often do people order? (time interval between each order）
+```{r,include=T }
+ggplot()+
+  geom_bar(aes(x = orders$days_since_prior_order, fill = factor(orders$days_since_prior_order))) + 
+  xlab("days of prior order") +
+  ylab("count") +
+  ggtitle("Time interval between orders") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  guides(fill = FALSE)
+```
+
+While the most popular relative time between orders is monthly (30 days), there are "local maxima" at weekly (7 days), biweekly (14 days), triweekly (21 days), and quadriweekly (28 days). Looks like customers order once in every week (check the peak at 7 days) or once in a month (peak at 30 days). We could also see smaller peaks at 14, 21 and 28 days (weekly intervals). 
+
+
+### 3.2 Products & Department and Aisles
+
+In this section we combined 'products.csv', 'aisles.csv' and 'departments.csv' to get a new data frame. Next we will have a general understanding of the storage of these products, we will anlysis how many products in each department and aisle.
+
+#### 3.2.1 Basic analysis
+```{r,include=FALSE}
+# merge data(products,aisles,departments)
+product1 <- full_join(products,aisles,by="aisle_id")
+finalproduct <- full_join(product1,departments,by="department_id")
+
+# check
+nra <- nrow(aisles)
+nrd <- nrow(departments)
+nrp <- nrow(products)
+str(finalproduct)
+glimpse(finalproduct)
+head(finalproduct)
+sum_fianlpro <- sum(complete.cases(finalproduct))
+```
+
+There are `r nra` aisles, `r nrd` departments in the data and `r nrp` products in the data set. There are 'r sum_fianlpro` complete rows in the data, hence no missing observation.
+
+#### 3.2.2 How many products in each department?
+```{r}
+prod_by_dept <- finalproduct %>%
+  group_by(department)%>%
+  tally()
+# prod_by_dept
+
+color_range <- colors()
+ggplot(prod_by_dept,aes(reorder(department,-n),n))+
+  geom_bar(stat = "identity", fill= 'blueviolet')+
+  theme(axis.text.x=element_text(angle=45, hjust=1), axis.title.x = element_blank())+
+  labs(title="The number of products in each department", x="departments", y="count")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+#What is the top 5 departments with the most products?
+# dept_top_five <- finalproduct %>%
+#                                        group_by(department)%>%
+#                                        tally()%>%
+#                                        arrange(desc(n))%>%
+#                                        top_n(5,n)
+# 
+# head(dept_top_five)
+
+#install.packages("plotrix")
+# library(plotrix)
+# pie3D(dept_top_five$n, labels = dept_top_five$department, main = "An exploded 3D pie chart of top 5 Departments", explode=0.1, radius=.9, labelcex = 1.2,  start=0.7)
+```
+
+The top five departments with the most products are personal care, snacks, pantry, beverages and frozen.
+
+#### 3.2.3 How many products in each aisle? 
+```{r}
+finalproduct1 <- subset(finalproduct, aisle != "missing")
+aisle_top_ten <- finalproduct1 %>%
+  drop_na(aisle)%>%
+  group_by(aisle)%>%
+  tally()%>%
+  arrange(desc(n))%>%
+  top_n(10,n)
+# head(aisle_top_ten)
+
+ggplot(aisle_top_ten,aes(reorder(aisle,-n),n))+
+  geom_bar(stat = "identity", fill='coral2')+
+  theme(axis.text.x=element_text(angle=45, hjust=1),axis.title.x = element_blank())+
+  labs(title="The number of products in each aisle", x="aisles", y="count")+
+  theme(plot.title = element_text(hjust = 0.5))
+  
+```
+
+This plot presents the top 10 aisles with highest number of products.
+
+### 3.3 Orders & Department and Aisles
+
+In this section we will explore the sales of different departments and aisles, including order frequency and reordered rate. Then, we are also interested in finding relationship between the sequence of each products putting in the cart by customers and the reordered chance of the product. 
+
+#### 3.3.1 Basic analysis
+```{r}
+# Change data type
+orders <- orders %>% mutate(order_hour_of_day = as.numeric(order_hour_of_day), eval_set = as.factor(eval_set))
+products <- products %>% mutate(product_name = as.factor(product_name))
+aisles <- aisles %>% mutate(aisle = as.factor(aisle))
+departments <- departments %>% mutate(department = as.factor(department))
+
+# Merge the datasets
+product1 <- full_join(products,aisles,by="aisle_id")
+product <- full_join(product1,departments,by="department_id")
+all_order <- rbind(train,prior)
+
+orders_new <- subset(orders, select=c(order_id,user_id))
+all_order_new <- subset(all_order,select = c(order_id,product_id,reordered))
+m1 <- full_join(orders_new,all_order_new,by="order_id")
+product_order <- full_join(product,m1,by="product_id")
+```
+
+First, we vertically combine ‘order_product_prior.csv’ and ‘order_product_train.csv’ and create a new data frame called  ‘all_order’.  Since there are no key variable between ‘product’ and ‘orders’, we have to merge these two datasets by merging them to ‘all_order’. Eventually, ‘product_order’  is the final data frame we created to do further analysis.
+
+#### 3.3.2 What is the best selling department?
+```{r,include=TRUE,warning=FALSE}
+product_order %>%
+  drop_na(department) %>%
+  group_by(department) %>%
+  distinct(order_id, .keep_all = T) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x=department,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="The number of orders in each department", x="deparmtment", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=45, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The most three popular departments are produce, dairy eggs and beverages.
+
+#### 3.3.3 How many products are reordered? 
+```{r,warning=FALSE,include=TRUE}
+# the number of reordered products
+tmp <- product_order %>%
+  drop_na(reordered) %>%
+  group_by(reordered) %>%
+  summarize(count = n()) %>%
+  mutate(reordered = as.factor(reordered)) %>%
+  mutate(proportion = count/sum(count))
+
+tmp %>%
+  ggplot(aes(x=reordered,y=count,fill=reordered))+
+  geom_bar(stat="identity")+
+  labs(title="Not reordered vs Reordered product", y="count")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_text(aes(label = count), position = position_dodge(.9)) +
+  scale_x_discrete(labels = c("notReordered", "Reordered"))
+```
+
+There are 19955360 products reordered by customers, 13863746 products are never reordered. 
+
+#### 3.3.4 What is the most reordered product?
+```{r,warning=FALSE,include=TRUE}
+# most reordered product
+tmp2 <- product_order %>%
+  group_by(product_id) %>%
+  summarize(proportion_reordered = mean(reordered), n=n()) %>%
+  top_n(10,wt=proportion_reordered) %>%
+  arrange(desc(proportion_reordered)) %>%
+  left_join(product,by="product_id")
+
+tmp2 %>%
+  ggplot(aes(x=reorder(product_name,-proportion_reordered), y=proportion_reordered))+
+  geom_bar(stat="identity",fill="red")+
+  theme(axis.text.x=element_text(angle=45, hjust=1),axis.title.x = element_blank())+coord_cartesian(ylim=c(0.85,0.95))+
+  labs(title="TOP 10 reordered ratio", x="products", y="reordered rate")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The top three products with highest reordered rate are Raw Veggie Wrappers, Serenity Ultimate Extrema Overnight Pads and Orange Energy Shots.
+
+#### 3.3.5 Which department has the highest reorder ratio?
+```{r,include=TRUE,warning=F}
+tmp <- product_order %>%
+  group_by(product_id)%>%
+  summarize(proportion_reordered = mean(reordered)) %>%
+  left_join(product,by="product_id")
+
+tmp %>%
+  group_by(department) %>%
+  summarize(depart_reordered = mean(proportion_reordered)) %>%
+  ggplot(aes(x=department,y=depart_reordered))+
+  geom_point(color="red", size=2)+
+  labs(title="Reordered rate in each department", x="departments", y="reordered rate")+
+  theme(axis.text.x=element_text(angle=45, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Personal care has the lowest reorder ratio and dairy eggs have highest reorder ratio.
+
+#### 3.3.6 Is there any relationship between the sequence of adding to cart and reordered chance？
+```{r,warning=FALSE,include=TRUE}
+# plot
+tmp3 <- all_order %>%
+  group_by(add_to_cart_order)%>%
+  summarize(proportion_reordered = mean(reordered))
+
+tmp3 %>%
+  ggplot(aes(x=add_to_cart_order,y=proportion_reordered))+
+  geom_point(color="red")+
+  xlim(c(0,70))+
+  ylim(c(0.3,0.7))+
+  labs(title="Add to cart order - Reorder ratio", x="add to cart order", y="reordered rate")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+# t-test
+t.test(add_to_cart_order~reordered,data=prior)
+```
+
+This graph shows that products placed initially in the cart are more likely to be reorderd than one placed later in the cart. We also did t-test to verify whether the sequence of products added to cart are significantly different between reordered products and not reordered products. We can conclude from the results showing the p-value is smaller than 0.05 that the sequence of products added to cart significantly influence whether the products are reordered.
+
+
+
+## Chapter 4 - Feature Selection
+
+We created three main types of features. More details are showing as below. 
+
+```{r prepare}
+# For easier modeling, decrease the rows of data set to get the new feature data set (last version of feature data set is over 6.42 million rows and almost 1 GB)
+orders <- subset(orders, user_id <= 10000)
+
+orders_prior <- subset(orders, eval_set == 'prior')
+orders_train <- subset(orders, eval_set == 'train')
+train2 <- subset(train, select = c(order_id, product_id, reordered))
+colnames(train2)[3] <- "ytrain"
+orders_train <- subset(orders_train, select = c(order_id, user_id))
+mergeTmp <- merge(orders_train, train2, by = 'order_id')
+mergeTmp <- mergeTmp[,-1]
+```
+
+```{r preprocess}
+orders[is.na(orders)] <- 0
+orders_prior[is.na(orders_prior)] <- 0
+merge1 <- merge(prior, orders, by = 'order_id')
+merge1 <- subset(merge1, select = c(order_id, product_id, add_to_cart_order, user_id, order_number, order_dow, order_hour_of_day, days_since_prior_order, reordered))
+# merge1 <- merge(merge1, mergeTmp, by = c("user_id","product_id"), all.x = TRUE)
+# merge1[is.na(merge1)] <- 0
+```
+
+### 4.1 User features
+
+User features are related to the ordering information of each customer. Each row of these features specifies distinct user.
+
+```{r user_features}
+# num of orders of users
+feature1 <- merge1 %>%
+  group_by(user_id) %>%
+  summarise(n.o.u = max(order_number))
+
+# num of products of users
+feature2 <- merge1 %>%
+  group_by(user_id) %>%
+  #distinct(product_id, .keep_all = TRUE) %>%
+  summarise(n.p.u = n())
+
+# avg products of orders of users
+feature3 <- merge(feature1, feature2, by = 'user_id') %>%
+  mutate(avg.pou = n.p.u / n.o.u)
+
+# day of max order
+feature4 <- merge1 %>%
+  group_by(user_id,order_dow) %>%
+  summarise(count = n()) %>% 
+  group_by(user_id) %>%
+  filter(count == max(count))
+feature4 <- feature4[,-3]
+
+colnames(feature4)[2] <- "d.m.o"
+
+# time of day of max order
+feature5 <- merge1 %>%
+  group_by(user_id, order_hour_of_day) %>%
+  summarise(count = n()) %>%
+  group_by(user_id) %>%
+  filter(count == max(count))
+feature5 <- feature5[,-3]
+
+colnames(feature5)[2] <- "t.m.o"
+
+# repeat order rate of user
+feature6 <- merge1 %>%
+  group_by(user_id) %>%
+  summarise(ror.u = mean(reordered))
+
+# oreder frequency
+feature7 <- orders_prior %>%
+  group_by(user_id) %>%
+  summarise(o.f = sum(days_since_prior_order) / n())
+```
+
+n.o.u(feature1): The number of orders for each user. 
+This feature is acquired by grouping users and by counting the number of orders.
+
+n.p.u(feature2): The number of products for each user.
+This feature is calculated by grouping users and by counting the total number of products.
+
+avg.pou(feature3): Average number of products per user ordered.
+This feature is equal to the total amount of products purchased by per user divided by the number of orders per user.
+
+d.m.p(feature4): The day on which each user ordered most frequently.
+We calculated the number of products per user ordered in each day and selected the day on which per user placed most number of orders as the value of this feature.
+
+t.m.o(feature5): The time of a day on which each user ordered most frequently.
+We calculated the number of products in each hour per user ordered and selected the hour on which per user placed most orders as the value of this feature.
+
+ror.u(feature6): Reordered ratio per user.
+Reordered ratio is the number of reordered products divided by the total number of products for each user.
+
+o.f(feature7): Shopping frequency for each user.
+This variable is derived from dividing the total time interval of orders by the total number of orders per user.
+
+```{r userFeature, include=TRUE}
+userFeature <- merge(feature3, feature4, by = 'user_id')
+userFeature <- merge(userFeature, feature5, by = 'user_id')
+userFeature <- merge(userFeature, feature6, by = 'user_id')
+userFeature <- merge(userFeature, feature7, by = 'user_id')
+head(userFeature)
+```
+
+We combine all the user features above into a new data frame. 'user_id' is the key variable in this data frame.
+
+### 4.2 Product features
+
+These features are specific to products, meaning that each row of these features represents a product. We totally created four product features.
+
+```{r f8-f11}
+# num of orders of products
+feature8 <- prior %>%
+  group_by(product_id) %>%
+  summarise(n.o.p = n())
+
+# repeat order rate of product
+feature9 <- prior %>%
+  group_by(product_id) %>%
+  summarise(ror.p = mean(reordered))
+
+# repeat order rate of product department
+d_p = merge(departments, products, by = 'department_id')
+d_p_1 = merge(d_p, feature9, by = 'product_id')
+feature10 <- d_p_1 %>%
+  group_by(department_id) %>%
+  mutate(ror.pd = mean(ror.p))
+feature10 <- subset(feature10, select = c(product_id, department_id, ror.pd))
+
+# avg position
+feature11 <- prior %>%
+  group_by(product_id) %>%
+  summarise(avg.p = mean(add_to_cart_order))
+```
+
+n.o.p(feature8): Ordering frequency for each product. 
+This is acquired by grouping product and by counting the number of orders for each product.
+
+ror.p(feature9): Reordered ratio for each product. 
+This feature is obtained by grouping product and by calculating the mean of reordered products.
+
+ror.pd(feature10): Average sequence in the cart for each product. 
+We grouped product and then calculated the mean of the sequence of each product in the cart.
+
+avg.p(feature11): Reordered ratio for each department. 
+We grouped departments and then calculated the mean of 'reorder_ratio_prod' in each group.
+
+```{r productFeature,include=TRUE}
+productFeature <- merge(feature8, feature9, by = 'product_id')
+productFeature <- merge(productFeature, feature10, by = 'product_id')
+productFeature <- merge(productFeature, feature11, by = 'product_id')
+head(productFeature)
+```
+
+Next, we merged these product features together. 'product_id' is the key variable in this data frame.
+
+### 4.3 User & Product features
+
+These features are the combination of users info and products info. So the data frame we created will definitely contain both 'user_id' and 'product_id'. Here are the relevant features.
+
+```{r f12-f14}
+# time of bought
+feature12 <- merge1 %>%
+  group_by(user_id, product_id) %>%
+  summarise(t.b = n())
+
+# repeat order rate of product of user
+t1 <- merge1 %>%
+  group_by(user_id) %>%
+  summarise(o.m = max(order_number))
+
+feature13 <- merge1 %>%
+  group_by(user_id, product_id) %>%
+  summarise(f.o.n = min(order_number))
+
+feature14 <- merge(t1, feature13, by = 'user_id') %>%
+  mutate(ror.pu = feature12$t.b / (o.m - f.o.n + 1))
+
+# last 4 order
+feature15 <- merge1 %>%
+  group_by(user_id)%>%
+  mutate(differ = max(order_number) - order_number + 1) %>%
+  filter(differ <= 4) %>%
+  group_by(user_id, product_id) %>%
+  summarise(l4o = n() / 4)
+```
+
+t.b(feature12): Times of each product bought by each user. 
+It is the count of orders after grouping 'user_id' and 'product_id'. 
+
+f.o.n(feature13): The order number in which customer bought the product.
+We first calculated the total number of orders for each user by counting the orders after grouping users and products. Then, we counted in which order was the first time that each user bought each product. 
+
+ror.pu(feature14): The ratio at which each product is reordered by each user. 
+Based on f.o.n(feature13), we set 'n' as the number of orders per user after first time shopping. Finally, we divided the times of each product that per user bought by 'n' and assigned the value to this feature.
+
+l4o(feature15): The ratio of each product bought in each user's last four orders.
+We first calculated the last four orders per user by reversing the order number for each product and then creating a new column called 'differ' and selecting orders where 'differ' is smaller than 5. Next, we counted the 'differ' per user and then divided it by 4.
+
+```{r upFeature, include=TRUE}
+upFeature <- merge(feature12, feature13, by = c('user_id', 'product_id'))
+upFeature <- merge(upFeature, feature14, by = c('user_id', 'product_id'))
+head(upFeature)
+```
+
+Here, we merged these new features we just created. We also noticed that 'l4o' has missing values. Maybe because the customer didn't buy this product in their last four orders. For this case, we filled the NaN with 0.
+
+```{r allFeature,include=F}
+allFeature <- merge(upFeature, productFeature, by = 'product_id')
+allFeature <- merge(allFeature,userFeature, by = 'user_id')
+allFeature <- merge(allFeature, mergeTmp, by = c("user_id", "product_id"), all.x = TRUE)
+allFeature[is.na(allFeature)] <- 0
+# head(allFeature)
+
+ #write.csv(allFeature, file = "features.csv")
+ #write.csv(allFeature, file = "subFeatures.csv")
+```
+```{r,include=F}
+originFeatures <- read.csv("features.csv")
+features <- read.csv("subFeatures.csv")
+nr1 <- nrow(originFeatures)
+nr2 <- nrow(features)
+```
+```{r,include=TRUE}
+knitr::kable(head(features))
+```
+
+Finally, we created 15 features and combined them into a new data frame called 'allFeature' and we save it as 'features.csv'. Since this file contains `r nr1` observations which are computational expensive and time consuming for R to run models, so we use subset function and select the first 10,000 and saved it as a new data set called 'subFeatures.csv', which has `r nr2` observations. Based on this new dataset, we can continue building our models.
+
+
+## Chapter 5 - Models and Evaluation
+
+### 5.1 Smart question: What products will the customers buy in thier next order? 
+
+Our goal is to use this anonymized data on customer orders over time to predict which previously purchased products will be in a user’s next order. The target is whether or not the customers will buy this specific product in the future (0 means will not buy, 1 means will buy), features are the 15 ones we just created. Since our target(dependent variable) is binary, we will use logistic regression for our first model. Then, we will deploy PCA to see whether those 15 features can be decomposed to several components and to build a PCR model. Because it is a classification question, we will also use KNN and Decision Tree algorithms for next models.
+
+### 5.2 Models
+
+```{r,include=F}
+#split the whole data set to train set and test set
+set.seed(1)
+shop_train_rows = sample(1:nrow(features),
+                              round(0.8 * nrow(features), 0),  
+                              replace = FALSE)
+
+
+length(shop_train_rows) / nrow(features)
+
+#shop_train = features[shop_train_rows,c(4,6:10,12:20)]
+shop_train = features[shop_train_rows,c(3,4,6:11,12:20)] 
+shop_train_label = features[shop_train_rows,"ytrain"]
+#shop_test = features[-shop_train_rows,c(4,6:10,12:20)] 
+shop_test = features[-shop_train_rows,c(3,4,6:11,12:20)] 
+shop_test_label = features[-shop_train_rows,"ytrain"]
+
+# Check the number of rows in each set.
+nrow(shop_train)
+nrow(shop_test)
+
+```
+
+Before buliding models, we first split the data into training set and testing set. The training set has 246155 observations while testing set contains 61539 observations.
+
+#### 5.2.1 Logistic Regression
+
+```{r,include=TRUE}
+head(shop_train)
+shoplogit <- glm(shop_train_label ~ t.b + f.o.n + ror.pu + l4o + n.o.p + ror.p  + ror.pd + avg.p + n.o.u + n.p.u + avg.pou + d.m.o + t.m.o + ror.u + o.f, data=shop_train, family="binomial")
+summary(shoplogit)
+```
+
+The result of logistic regression shows that t.b (times of each product bought by each user), f.o.n (the order number in which customer bought the product), ror.pu (the ratio at which each product is reordered by each user), l4o (the ratio of each product bought in each user's last four orders), ror.p(reordered ratio for each product), ror.pd (average sequence in the cart for each product), avg.pou (average number of products per user ordered), d.m.p (the day on which each user ordered most frequently), ror.u (reordered ratio per user) and o.f(shopping frequency for each user) are significantly influence the choice of customers in their next orders.
+
+```{r,include=F}
+# logistic regression model evaluation
+# AUC
+loadPkg("pROC")
+shop_test$predict1<- predict(shoplogit, shop_test, type=c("response"))
+h1 <- roc(shop_test_label ~ predict1, data=shop_test)
+auc(h1)
+```
+```{r,include=T}
+plot(h1)
+```
+```{r,include=F}
+#McFadden
+loadPkg("pscl") 
+surLogitpr2_2 = pR2(shoplogit)
+surLogitpr2_2
+surLogitpr2_2['McFadden']
+```
+
+Since area under the curve is 0.74, which is smaller than 0.8. With the McFadden value, only 10.93% of target (will buy or not buy) is explained by the explanatory variables in the model. This model actually is not as good as we expected.
+
+```{r acc, include=TRUE, warning=FALSE}
+shop_test <- shop_test %>% mutate(model_pred = 1 * (predict1 > .53) + 0)
+shop_test <- shop_test %>% mutate(accurate = 1 * (model_pred == shop_test_label))
+acc <- sum(shop_test$accurate) / nrow(shop_test)
+cm_logit <- confusionMatrix( factor(shop_test$model_pred), reference = factor(shop_test_label))
+knitr::kable(cm_logit$byClass)
+```
+
+Using confusion matrix to calculate accuracy and other evaluation parameters, we found that the F1 score is 0.9396, the sensitivity (recall value) is 0.9944, the specificity is 0.0436, the accuracy is 0.8867 and the precision value is 0.8906.
+
+
+#### 5.2.2 PCA and PCR
+
+```{r,include=F}
+dfpca <- features[c(4:10,12:21)]
+pca <- prcomp(dfpca,scale=TRUE)
+summary(pca)
+```
+```{r,include=F}
+pr.var <- (pca$sdev^2)
+pve <- pr.var/sum(pr.var)
+cumsum(pve)
+```
+```{r, include=TRUE}
+plot(cumsum(pve), xlab="Principal Component (standardized)", ylab ="Cumulative Proportion of Variance Explained",ylim=c(0,1),type="b")
+```
+
+From the plot we know that 8 compenonts of the standardized analysis compose around 80% of the variance, 11 compenonts compose approximate 90% of the variance and 13 components carry 99% of the variance. So the curve on the graph is gradually increasing, meaning that there is no one component that carries a lot of variance.
+
+```{r,include=F}
+# PCR
+loadPkg("pls")
+pcr.fit1=pcr(ytrain~.,data=dfpca,scale=TRUE,validation ="CV")
+summary(pcr.fit1)
+```
+```{r,include=TRUE}
+validationplot(pcr.fit1 ,val.type="MSEP",legend="topright")
+validationplot(pcr.fit1,val.type="R2")
+```
+
+We choose Cross-validation (CV) method to evaluate our model. The first plot is mean square error prediction (MSE) and the second one is R squared (R2). Starting with the fourth component, the MSE value is becoming low，and at the same time that the R2 value gets bigger from the fourth one.
+
+#### 5.2.3 KNN
+
+```{r,include=F}
+#split the whole data set to train set and test set
+set.seed(1)
+shop_train_rows = sample(1:nrow(features),
+                              round(0.8 * nrow(features), 0),  
+                              replace = FALSE)
+
+
+length(shop_train_rows) / nrow(features)
+
+#shop_train = features[shop_train_rows,c(4,6:10,12:20)]
+shop_train = features[shop_train_rows,c(3,4,6:11,12:20)] 
+shop_train_label = features[shop_train_rows,"ytrain"]
+#shop_test = features[-shop_train_rows,c(4,6:10,12:20)] 
+shop_test = features[-shop_train_rows,c(3,4,6:11,12:20)] 
+shop_test_label = features[-shop_train_rows,"ytrain"]
+```
+
+```{r,include=F}
+# loadPkg("caret") 
+# cmtable <- data.frame(matrix(ncol = 0, nrow = 11))
+# for (k in seq(1,21,by=2)){
+#   class_knn=knn(train = shop_train,    #<- training set cases
+#                   test = shop_test,       #<- test set cases
+#                   cl = shop_train_label,     #<- category for classification
+#                   k = k,                #<- number of neighbors considered
+#                   )  
+#   cm <- confusionMatrix( factor(class_knn), reference = factor(shop_test_label))
+#   cmtable<- cbind(cmtable,data.frame(cm$byClass))
+# }
+# cmtable <- data.frame(cmtable)
+# x <- c(paste0("k=", seq(1,21,by=2)))
+# colnames(cmtable) <- x
+```
+
+We built model from 1NN to 21NN (k is odd number) to see what is the best k value and used confusion Matrix for evaluation. This part takes a long time so we post the result as "knn_accuracy_table.csv" which is saved in the 'DataSet' of our Github.
+
+```{r,include=T}
+cmtable <- read.csv("knn_accuracy_table.csv")
+cmtable <- data.frame(cmtable[,-1], row.names = cmtable[,1])
+
+
+#choose parameters
+para_index=c(2,5,6,7)
+cmtable1=cmtable[para_index,]
+knitr::kable(cmtable)
+```
+
+```{r,include=F}
+# accuracy value
+
+# loadPkg("class")
+# chooseK = function(k, train_set, val_set, train_class, val_class){
+#   
+#   # Build knn with k neighbors considered.
+#  set.seed(1)
+#  class_knn = knn(train = train_set,    #<- training set cases
+#                   test = val_set,       #<- test set cases
+#                   cl = train_class,     #<- category for classification
+#                   k = k,                #<- number of neighbors considered
+#                   use.all = TRUE)       #<- control ties between class assignments
+#                                         #   If true, all distances equal to the kth 
+#                                         #   largest are included
+#   accu = sum(tab[row(tab) == col(tab)]) / sum(tab)                         
+#   cbind(k = k, accuracy = accu)
+# }
+# 
+# knn_different_k = sapply(seq(1, 21, by = 2),  
+#                          function(x) chooseK(x, 
+#                                              train_set = shop_train,
+#                                              val_set = shop_test,
+#                                              train_class = shop_train_label,
+#                                              val_class = shop_test_label))
+```
+```{r,include=T}
+accuracy_knn <- read.csv("accuracy.csv")
+accuracy_knn <- accuracy_knn[2,2:12]
+colnames(accuracy_knn) <- c("K=1","K=3","K=5","K=7","K=9","K=11","K=13","K=15","K=17","K=19","K=21")
+rownames(accuracy_knn) <- "Accuracy"
+knitr::kable(accuracy_knn)
+```
+
+```{r,include=T}
+# set up the plot
+xrange <- range(1,21)
+yrange <- range(0,1)
+plot(xrange, yrange, type="n", xlab="k value",
+   ylab="value",xaxt="n" )
+axis(1,at=seq(1,21,2))
+linetype <- c(1:11)
+colors <- rainbow(15)
+
+#add lines
+for (i in seq(1,4)){
+  para <- cmtable1[i,]
+  lines(seq(1,21,by=2),para, type="l", lwd=1.5,lty=linetype[1], col=colors[i])
+}
+  
+title("Parameters of different k")
+legend("bottomright", rownames(cmtable1), cex=0.8, col=colors,
+   lty=1, title="Evaluation Parameters")
+```
+
+We tried k value as all odd numbers from 1 to 21, and found that when k value is 15, the F1 score is the highest, which is 0.9398. We chose a small k value to ensure the complexity of the model. It seems 15-nearest neighbors is a decent choice. In this case, the sensitivity is 0.9984, the specificity is 0.0096, the accuracy value is 0.8859, the presision value is 0.8876.
+
+#### 5.2.4 Decision Tree
+
+```{r,include=F}
+library("rpart")
+shoptree <- rpart(shop_train_label ~ t.b + f.o.n + ror.pu + l4o + n.o.p + ror.p  + ror.pd + avg.p + n.o.u + n.p.u + avg.pou + d.m.o + t.m.o + ror.u + o.f, data=shop_train, method="class",control=rpart.control(minbucket=20,cp=0.0001))
+
+#summary(shoptree)
+#plot(shoptree, uniform=TRUE, main="Classification Tree")
+#text(shoptree, use.n=TRUE, all=TRUE, cex=.8)
+```
+
+```{r, fancyplot, include=TRUE, warning=FALSE} 
+# fancyplot
+#loadPkg("rpart.plot")
+#rpart.plot(shoptree)
+#loadPkg("rattle") # For fancyRpartPlot (Trees) Answer "no" on installing from binary source
+#fancyRpartPlot(shoptree, sub = '')
+
+shop_test$predict2 <- predict(shoptree, shop_test, type = "class")
+```
+
+```{r, include=T,message=F,warning=FALSE}
+# model evaluation
+loadPkg("caret") 
+cm = confusionMatrix(factor(shop_test$predict2), reference = factor(shop_test_label) )
+# print('Overall: ')
+# cm$overall
+cm$overall['Accuracy']
+# print('Class: ')
+knitr::kable(cm$byClass)
+```
+
+The result of decision tree model shows that the F1 score is 0.9397. We can also notice that sensitivity is (recall rate) is 0.9910, specificity is 0.0736, overall accuracy is 0.8871 and precision is 0.8933.
+
+### 5.3 Prediction
+
+We used decision tree model to predict what products will the customers buy in their next orders, and also compared the predicted results with customer's previous orderings. Below are the most popular products and departments in customer's future and former orders.
+
+```{r predict,include=T}
+result <- subset(shop_test, predict2 == 1)
+result <- result %>%
+  group_by(product_id) %>%
+  summarise(count = n())
+
+result <- merge(result, products, all.x = TRUE)
+result<- result[order(result$count, decreasing = TRUE),]
+result <- result[1:10, ]
+
+result %>%
+  ggplot(aes(x=product_name,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="The top 10 predicted products", x="Product", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+
+result2 <- subset(shop_test, predict2 == 1)
+result2 <- result2 %>%
+  group_by(department_id) %>%
+  summarise(count = n())
+
+result2 <- merge(result2, departments, all.x = TRUE)
+
+result2%>%
+  ggplot(aes(x=department,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="The number of predicted products in each department", x="Department", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r,include=T}
+orders <- subset(orders, user_id <= 10000)
+
+product1 <- full_join(products,aisles,by="aisle_id")
+product <- full_join(product1,departments,by="department_id")
+all_order <- rbind(train,prior)
+
+orders_new <- subset(orders, select=c(order_id,user_id))
+all_order_new <- subset(all_order,select = c(order_id,product_id,reordered))
+m1 <- full_join(orders_new,all_order_new,by="order_id")
+product_order <- full_join(product,m1,by="product_id")
+reorderProduct <- subset(product_order, reordered == 1)
+```
+
+```{r,warning=FALSE,include=T}
+# most reordered product
+tmp2 <- reorderProduct %>%
+  group_by(product_id) %>%
+  summarize(count = n())
+
+tmp2 <- merge(tmp2, products, all.x = TRUE)
+tmp2 <- tmp2[order(tmp2$count, decreasing = TRUE),]
+tmp2 <- tmp2[1:10, ]
+
+tmp2%>%
+  ggplot(aes(x=product_name,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="Top 10 previous reordered products", x="Products", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r,include=T}
+tmp <- reorderProduct %>%
+  group_by(department_id) %>%
+  summarize(count = n())
+
+tmp <- merge(tmp, departments, all.x = TRUE)
+
+tmp %>%
+  ggplot(aes(x=department,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="The number of previous reordered products in each department", x="Department", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+## Chapter 6 - Summary
+
+```{r}
+target_1<-sum(features$ytrain==1)
+target_0<-sum(features$ytrain==0)
+```
+
+### 6.1 Conclusions
+
+We tried four models, including Logistic Regression, PCA/PCR, KNN and Decision Tree. Since the PCA results shows there is no significant effect of dimension reduction, we only compared the other three models. The F1 score of these three models are pretty close, Logistic Regression is 0.9673, KNN is 0.9398 and Decision Tree is 0.9397. The specificity score of logistic regression is 0.0283 and of KNN is 0.0096, the specificity of decision tree is 0.0736, which is comparable higher than the others. So we finally choose decision tree model to predict our question.
+
+We compared the predicted results with the results of reordered products in the original data set. First, we compared the most popular products we predicted with the the most popular products people ordered before. As we predict, the top five most popular products are banana, bag of organic bananas, organic baby spinach, organic raspberries and organic strawberries. The top five products that people used to buy are banana, bag of organic bananas and organic strawberries, organic baby spinach and organic avocado. We also found that the top three departments with most number of predicted products are produce, dairy eggs and beverages, the result is the same as we found according to the previous orders. 
+
+So we can conclude that the products we predict are basically consistence with the customers' previous shopping habits.
+
+### 6.2 Limitations
+
+First, although the F1 score of the three models are relatively high, we found that all the specificity value are low. This indicates that the high accuracy is due to the high proportion of false negative, which means that we correctly predict that what kinds of products that customers will not buy rather than they will buy, that is, we exclude many things that customers may not reorder. So, when it comes to what products the customer will buy next time, there are relative small amount of cases in the model where the predicted value is the same as the observed value. The problem arises because the values in the target are not evenly distributed, since there are only `r target_1` observations of 1 but `r target_0` observations of 0, obviously there are too many targets where values are 0. However, we can improve on this with oversampling method.
+
+Second, due to the large amount of data, we only selected the first 10,000 users as our modeling sample. Even though this is the easiest way to achieve subset, it may not as propitiate as random sampling. However, users are independent with each other, so the way we select the data will not influence the modeling process.
+
+## Chapter 7 - Reference
+
+“The Instacart Online Grocery Shopping Dataset 2017”, Accessed from https://www.instacart.com/datasets/grocery-shopping-2017
+
+## Appendix
+### Data source
+Link: https://www.kaggle.com/c/instacart-market-basket-analysis/data
+
+### Task divisions
+Ruth: EDA（code+analysis） + Slides
+
+Zixuan: EDA（code+analysis）+ summary report
+
+Qing: EDA（code+analysis）+ feature selection(idea+analysis)
+
+Kaiqi: data preprocessing(code) + feature selection(code) 
+
+Zichu: model building and evaluation(code)
+
+### Github
+Githublink: https://github.com/Kelv1nYu/ItDsProj2
+
