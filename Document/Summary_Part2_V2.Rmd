@@ -259,7 +259,7 @@ head(allFeature)
  #write.csv(allFeature, file = "subFeatures.csv")
 ```
 ```{r,include=F}
-originFeatures <- read.csv("features.csv")
+originFeatures <- read.csv("../Code/features.csv")
 features <- read.csv("../Dataset/subFeatures.csv")
 nr1 <- nrow(originFeatures)
 nr2 <- nrow(features)
@@ -289,9 +289,11 @@ shop_train_rows = sample(1:nrow(features),
 
 length(shop_train_rows) / nrow(features)
 
-shop_train = features[shop_train_rows,c(4,6:10,12:20)] 
+#shop_train = features[shop_train_rows,c(4,6:10,12:20)]
+shop_train = features[shop_train_rows,c(3,4,6:11,12:20)] 
 shop_train_label = features[shop_train_rows,"ytrain"]
-shop_test = features[-shop_train_rows,c(4,6:10,12:20)] 
+#shop_test = features[-shop_train_rows,c(4,6:10,12:20)] 
+shop_test = features[-shop_train_rows,c(3,4,6:11,12:20)] 
 shop_test_label = features[-shop_train_rows,"ytrain"]
 
 # Check the number of rows in each set.
@@ -340,7 +342,7 @@ cm_logit <- confusionMatrix( factor(shop_test$model_pred), reference = factor(sh
 knitr::kable(cm_logit$byClass)
 ```
 
-Using confusion matrix to calculate accuracy and other evaluation parameters, we found that the F1 score is 0.9673, the sensitivity (recall value) is 0.9978, the specificity is 0.0283, the accuracy is 0.9369 and the precision value is 0.9387.
+Using confusion matrix to calculate accuracy and other evaluation parameters, we found that the F1 score is 0.9396, the sensitivity (recall value) is 0.9944, the specificity is 0.0436, the accuracy is 0.8867 and the precision value is 0.8906.
 
 
 #### 5.2.2 PCA and PCR
@@ -429,21 +431,25 @@ legend("bottomright", rownames(cmtable1), cex=0.8, col=colors,
 We tried k value as all odd numbers from 1 to 21, and found that when k value is 15, the F1 score is the highest, which is 0.9398. We chose a small k value to ensure the complexity of the model. It seems 15-nearest neighbors is a decent choice. In this case, the sensitivity is 0.9984, the specificity is 0.0096, the presision value is 0.8876.
 
 #### 5.2.4 Decision Tree
+```{r}
+features <- read.csv("../Dataset/subFeatures.csv")
+```
+
 ```{r,include=F}
 library("rpart")
 shoptree <- rpart(shop_train_label ~ t.b + f.o.n + ror.pu + l4o + n.o.p + ror.p  + ror.pd + avg.p + n.o.u + n.p.u + avg.pou + d.m.o + t.m.o + ror.u + o.f, data=shop_train, method="class",control=rpart.control(minbucket=20,cp=0.0001))
 
-summary(shoptree)
-plot(shoptree, uniform=TRUE, main="Classification Tree")
-text(shoptree, use.n=TRUE, all=TRUE, cex=.8)
+#summary(shoptree)
+#plot(shoptree, uniform=TRUE, main="Classification Tree")
+#text(shoptree, use.n=TRUE, all=TRUE, cex=.8)
 ```
 
 ```{r, fancyplot, include=TRUE, warning=FALSE} 
 # fancyplot
-loadPkg("rpart.plot")
-rpart.plot(shoptree)
-loadPkg("rattle") # For fancyRpartPlot (Trees) Answer "no" on installing from binary source
-fancyRpartPlot(shoptree, sub = '')
+#loadPkg("rpart.plot")
+#rpart.plot(shoptree)
+#loadPkg("rattle") # For fancyRpartPlot (Trees) Answer "no" on installing from binary source
+#fancyRpartPlot(shoptree, sub = '')
 
 shop_test$predict2 <- predict(shoptree, shop_test, type = "class")
 ```
@@ -461,6 +467,86 @@ knitr::kable(cm$byClass)
 
 The result of decision tree model shows that the F1 score is 0.9397. We can also notice that sensitivity is (recall rate) is 0.9910, specificity is 0.0736, overall accuracy is 0.8871 and precision is 0.8933.
 
+```{r predict}
+result <- subset(shop_test, predict2 == 1)
+result <- result %>%
+  group_by(product_id) %>%
+  summarise(count = n())
+
+result <- merge(result, products, all.x = TRUE)
+result<- result[order(result$count, decreasing = TRUE),]
+result <- result[1:10, ]
+
+result%>%
+  ggplot(aes(x=product_name,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="Top 10 Products", x="Product", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))
+  theme(plot.title = element_text(hjust = 0.5))
+
+result2 <- subset(shop_test, predict2 == 1)
+result2 <- result2 %>%
+  group_by(department_id) %>%
+  summarise(count = n())
+
+result2 <- merge(result2, departments, all.x = TRUE)
+
+result2%>%
+  ggplot(aes(x=department,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="The Department", x="Department", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+orders <- subset(orders, user_id <= 10000)
+
+product1 <- full_join(products,aisles,by="aisle_id")
+product <- full_join(product1,departments,by="department_id")
+all_order <- rbind(train,prior)
+
+orders_new <- subset(orders, select=c(order_id,user_id))
+all_order_new <- subset(all_order,select = c(order_id,product_id,reordered))
+m1 <- full_join(orders_new,all_order_new,by="order_id")
+product_order <- full_join(product,m1,by="product_id")
+reorderProduct <- subset(product_order, reordered == 1)
+
+```
+
+```{r,warning=FALSE,echo=TRUE}
+# most reordered product
+tmp2 <- reorderProduct %>%
+  group_by(product_id) %>%
+  summarize(count = n())
+
+tmp2 <- merge(tmp2, products, all.x = TRUE)
+tmp2 <- tmp2[order(tmp2$count, decreasing = TRUE),]
+tmp2 <- tmp2[1:10, ]
+
+tmp2%>%
+  ggplot(aes(x=product_name,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="Top 10 Products", x="Products", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r,echo=TRUE}
+tmp <- reorderProduct %>%
+  group_by(department_id) %>%
+  summarize(count = n())
+
+tmp <- merge(tmp, departments, all.x = TRUE)
+
+tmp %>%
+  ggplot(aes(x=department,y = count))+
+  geom_bar(stat="identity",fill="red")+
+  labs(title="Departments reordered", x="Department", y="the number of orders")+
+  theme(axis.text.x=element_text(angle=90, hjust=1))
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
 
 ## Chapter 6 - Summary
 ```{r}
@@ -473,7 +559,6 @@ First, we tried four models, including Logistic Regession, PCA/PCR, KNN and Deci
 Second, although the F1 score of the three models are relatively high, we found that all the specificity value are low. This indicates that the high accuracy is due to the high proportion of false negative, which means that we correctly predict that what kinds of products that customers will not buy rather than they will buy, that is, we exclude many things that customers may not reorder. So, when it comes to what products the customer will buy next time, there are relative small amount of cases in the model where the predicted value is the same as the observed value. The problem arises because the values in the target are not evenly distributed, since there are only `r target_1` observations of 1 but `r target_0` observations of 0, obviously there are too many targets where values are 0. However, we can improve on this with oversampling method.
 
 Third, due to the large amount of data, we only selected the first 10,000 users as our modeling sample. Even though this is the easiest way to achieve subset, it may not as propitiate as random sampling. However, users are independent with each other, so the way we select the data will not influece the modeling process.
-
 
 ## Chapter 7 - Reference
 
