@@ -1,4 +1,4 @@
-# ItDsProj2
+# Instacart Online Grocery Shopping Statistics 
 
 The Second project of Introduction to Data Science of GWU
 
