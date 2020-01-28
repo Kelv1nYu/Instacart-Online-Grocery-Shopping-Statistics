@@ -1,8 +1,8 @@
 ## Document
 
-* Rmd File of Summary
-* Html File of Summary
+* Summary (Rmd files and HTML files)
 * PPT File of Presentation
+* Others
 
 ---
 
